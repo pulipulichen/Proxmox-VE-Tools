@@ -20,10 +20,15 @@ ENABLE_BURN_IN=true
 CPU_TEST_SIZE_MB=512
 
 # Burn-in Configuration
-BURN_DURATION_SEC=300       # 5 Minutes
-DL_RATE_LIMIT="10m"         # 10MB/s
-# Note: Increased bytes to 4GB so the download lasts at least 5 mins (4000MB / 10MBps = 400s)
-DL_URL="https://speed.cloudflare.com/__down?bytes=4000000000" 
+BURN_DURATION_SEC=600       # 5 Minutes
+DL_RATE_LIMIT="100m"         # 100MB/s (e.g., "100k", "10m", "1g")
+
+# Calculate download bytes dynamically based on duration and rate limit
+DL_RATE_BPS=$(convert_rate_to_bytes_per_second "$DL_RATE_LIMIT")
+DOWNLOAD_BYTES=$((DL_RATE_BPS * BURN_DURATION_SEC))
+
+# Construct DL_URL with dynamic bytes. Ensure a minimum of 1 byte to avoid errors.
+DL_URL="https://speed.cloudflare.com/__down?bytes=$((DOWNLOAD_BYTES > 0 ? DOWNLOAD_BYTES : 1))"
 
 ALL_OK=true
 declare -a NET_RESULTS
@@ -40,6 +45,37 @@ calc_duration() {
     start=$1
     end=$2
     awk -v s="$start" -v e="$end" 'BEGIN {printf "%.3f", e-s}'
+}
+
+# Function to convert DL_RATE_LIMIT string (e.g., "100m", "10k", "1G") to bytes per second
+convert_rate_to_bytes_per_second() {
+    local rate_str="$1"
+    local num_part=$(echo "$rate_str" | sed 's/[^0-9.]//g')
+    local unit_part=$(echo "$rate_str" | sed 's/[0-9.]//g' | tr '[:lower:]' '[:upper:]') # Convert to uppercase for case-insensitivity
+
+    local rate_bps=0
+    local multiplier=1
+
+    if [[ -z "$num_part" ]]; then
+        echo "Error: Invalid rate limit format: $rate_str" >&2
+        echo 0
+        return
+    fi
+
+    case "$unit_part" in
+        "K") multiplier=$((1024)) ;; # Kilobytes
+        "M") multiplier=$((1024 * 1024)) ;; # Megabytes
+        "G") multiplier=$((1024 * 1024 * 1024)) ;; # Gigabytes
+        "") multiplier=1 ;; # Assume bytes if no unit
+        *)
+            echo "Warning: Unknown unit '$unit_part' in DL_RATE_LIMIT. Assuming bytes per second." >&2
+            multiplier=1
+            ;;
+    esac
+
+    # Use awk for floating point multiplication, then convert to integer
+    rate_bps=$(awk -v n="$num_part" -v m="$multiplier" 'BEGIN {printf "%.0f", n * m}')
+    echo "$rate_bps"
 }
 
 cleanup() {
@@ -195,7 +231,7 @@ if [ "$ALL_OK" = true ]; then
         echo "      Starting 5-Minute Burn-in Test     "
         echo "========================================="
         echo "Duration: ${BURN_DURATION_SEC} seconds"
-        echo "Target:   CPU, Memory, IO Stress + 10MB/s Download"
+        echo "Target:   CPU, Memory, IO Stress + ${DL_RATE_LIMIT}/s Download"
         echo
 
         BG_PIDS=""
@@ -206,6 +242,19 @@ if [ "$ALL_OK" = true ]; then
             echo "[Network] 'wget' not found. Attempting to install via apt..."
             apt update; apt install wget -y
         fi
+
+        # Check if stress-ng is available, if not, attempt to install
+        if ! command -v stress-ng &> /dev/null; then
+            echo "[System] 'stress-ng' not found. Attempting to install via apt..."
+            apt update; apt install stress-ng -y
+        fi
+
+        start_burn_in_time=$(date +"%Y-%m-%d %H:%M:%S")
+        end_burn_in_timestamp=$(( $(date +%s) + BURN_DURATION_SEC ))
+        end_burn_in_time=$(date -d "@$end_burn_in_timestamp" +"%Y-%m-%d %H:%M:%S")
+        echo "[Burn-in] Start Time: $start_burn_in_time"
+        echo "[Burn-in] Estimated End Time: $end_burn_in_time"
+        
 
         # Re-check and run
         if command -v wget &> /dev/null; then
@@ -222,11 +271,6 @@ if [ "$ALL_OK" = true ]; then
         # 4.2 Start System Stress (CPU/Mem/IO)
         echo "[System]  Starting Stress Load..."
         
-        # Check if stress-ng is available, if not, attempt to install
-        if ! command -v stress-ng &> /dev/null; then
-            echo "[System] 'stress-ng' not found. Attempting to install via apt..."
-            apt update; apt install stress-ng -y
-        fi
 
         # Re-check and run
         if command -v stress-ng &> /dev/null; then
@@ -236,17 +280,26 @@ if [ "$ALL_OK" = true ]; then
             # --io 2: 2 i/o stressors
             # --timeout: stop after duration
             echo "   -> Using 'stress-ng' (Professional Tool)"
-            stress-ng --cpu 0 --io 2 --vm 2 --vm-bytes 512M --timeout "${BURN_DURATION_SEC}s" --metrics-brief &
+            BURN_IN_DIR="/tmp/burnin_$(date +%Y%m%d_%H%M%S)"
+            rm -rf "${BURN_IN_DIR}"
+            mkdir "${BURN_IN_DIR}"
+            stress-ng \
+                --hdd 8 \
+                --hdd-opts direct,wr-seq \
+                --hdd-write-size 4M \
+                --hdd-bytes 90% \
+                --temp-path "${BURN_IN_DIR}" \
+                --cpu 0 --vm 1 --vm-bytes 5% --timeout "${BURN_DURATION_SEC}s" --metrics-brief &
             stress_pid=$!
             BG_PIDS="$BG_PIDS $stress_pid"
             
             # Wait for stress-ng to finish (it handles the timeout itself)
             wait $stress_pid
-
+            rm -rf "${BURN_IN_DIR}"
         elif command -v stress &> /dev/null; then
             # Fallback method: classic stress
             echo "   -> Using 'stress' (Classic Tool)"
-            stress --cpu 4 --io 2 --vm 2 --vm-bytes 512M --timeout "${BURN_DURATION_SEC}s" &
+            stress --cpu 4 --io 8 --vm 1 --vm-bytes 8G --timeout "${BURN_DURATION_SEC}s" &
             stress_pid=$!
             BG_PIDS="$BG_PIDS $stress_pid"
             wait $stress_pid
