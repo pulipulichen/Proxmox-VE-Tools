@@ -1,6 +1,22 @@
 # Proxmox-VE-Tools
 Scripts for Proxmox VE deployment
 
+## Get the scripts
+
+cluster-ssh-copy.sh
+
+```bash
+wget https://ppt.cc/fH1rZx
+```
+
+cluster-ssh-exec.sh
+
+```bash
+wget https://ppt.cc/fGrODx
+```
+
+
+
 ## cluster-ssh-copy.sh
 
 This script copies a specified file to multiple hosts listed in a `host.txt` file.
