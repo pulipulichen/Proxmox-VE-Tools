@@ -1,0 +1,2 @@
+date > /tmp/date.txt
+echo "Date written to /tmp/date.txt on $(hostname)"
