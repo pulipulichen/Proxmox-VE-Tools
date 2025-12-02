@@ -37,7 +37,7 @@ while IFS= read -r host; do
   if [ -n "$host" ]; then # Ensure host is not empty
     echo "  -> Copying to $host..."
     # Use ssh to create the directory on the remote host if it doesn't exist
-    ssh "$host" "sudo mkdir -p $DESTINATION_PATH"
+    ssh "$host" "sudo mkdir -p $DESTINATION_PATH" &
     # Use scp to copy the file to the remote host
     # -p preserves modification times, access times, and modes
     # -q suppresses the progress meter
