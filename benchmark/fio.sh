@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-fio --filename=/dev/sda \
-    --direct=1 --rw=read --bs=4k \
-    --size=200G --numjobs=32 --runtime=600 \
-    --group_reporting --name=file1 --time_based=1
+fio --direct=1 --rw=randrw --ioengine=libaio --bs=4k --rwmixread=100 \
+    --filename=/dev/sda:/dev/sdb --iodepth=128 --numjobs=128 -runtime=600 \
+    --time_based --group_reporting --name=fiotest --output=fiotest.txt
