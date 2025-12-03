@@ -4,7 +4,7 @@
 # Declare NIC and IP pairs (each element is "nic,ip")
 NIC_IP_PAIRS=(
   "eth0,8.8.8.8"
-  "eth1,172.22.61.31"
+#   "eth1,172.22.61.31"
 )
 
 # Mount points to test (read/write operations will be performed here)
@@ -15,13 +15,14 @@ ENABLE_BURN_IN=true
 
 # Burn-in Configuration
 BURN_DURATION_SEC=300       # 5 Minutes
-BURN_DURATION_SEC=10
-DL_RATE_LIMIT="100m"         # 100MB/s
+BURN_DURATION_SEC=10      # Uncomment for short testing
+DL_RATE_LIMIT="100m"        # 100MB/s
 BURN_IN_MEM_MAX="20G"
 
 # Thresholds
 LATENCY_THRESHOLD_MS=20
 DISK_TEST_SIZE_MB=1024
+LATENCY_TEST_COUNT=100        # <--- NEW: Number of iterations for latency averaging
 
 # Timezone Configuration
 TIMEZONE="Asia/Taipei" # Default timezone for reports and timestamps
@@ -139,8 +140,8 @@ echo
 # ====== 2. Disk I/O Test (Fixed Latency Logic) ======
 echo "[2/3] Running Disk I/O Test..."
 
-# Try to ensure ioping is present for best accuracy, but we have a DD fallback
-check_install_tool "ioping"
+# Use DD fallback loop for consistent averaging
+# check_install_tool "ioping" # Not needed as we use manual DD averaging now
 
 for mount in "${MOUNT_POINTS[@]}"; do
   echo "   -> Testing $mount ..."
@@ -156,11 +157,9 @@ for mount in "${MOUNT_POINTS[@]}"; do
   LAT_FILE="$mount/test_lat_$$.tmp"
   
   # --- A. THROUGHPUT TEST (Bandwidth) ---
-  # We use the large 1GB file ONLY for speed, NOT for latency calculation.
   echo -n "      [Speed] Writing 1GB... "
   
   start_w=$(get_time)
-  # direct flag avoids cache for write speed, but for pure sequential throughput test
   if ! dd if=/dev/zero of="$TEST_FILE" bs=1M count=$DISK_TEST_SIZE_MB oflag=direct status=none 2>/dev/null; then
       echo "FAILED"
       ALL_OK=false
@@ -188,65 +187,42 @@ for mount in "${MOUNT_POINTS[@]}"; do
   echo "Done (${speed_r} MB/s)."
   rm -f "$TEST_FILE"
 
-  # --- B. LATENCY TEST (Response Time) ---
-  # Only tests single 4k block processing time
-  echo -n "      [Latency] Checking IOPS latency... "
+  # --- B. LATENCY TEST (Response Time - Averaged) ---
+  echo -n "      [Latency] Checking IOPS latency (Avg of $LATENCY_TEST_COUNT runs)... "
   
-  LATENCY_MS=0
+  TOTAL_LAT_SEC=0
   
-  if command -v ioping &> /dev/null; then
-      # METHOD 1: ioping (Best, closest to FIO)
-      # -c 5: count 5 checks, -q: quiet
-      # We extract the average latency from the report
-      LATENCY_VAL=$(ioping -c 5 -D -s 4k -w 2 -q "$mount" | tail -n 1 | awk '{print $4}' | cut -d'/' -f2)
-      # ioping output varies, standard is usually in us or ms. Assuming ms output or converting.
-      # Usually output: min/avg/max/mdev = 150.2 us / 180.5 us ...
-      # Let's ensure we get it in ms.
-      
-      # Safer output parsing using -B (batch mode if avail) or raw parsing
-      # Let's rely on a simpler single-shot check if parsing is risky:
-      # Measure time for one ping
-      RAW_OUT=$(ioping -c 1 -D -s 4k -q "$mount")
-      # Extract time value (usually "time=X us" or "time=X ms")
-      # This is complex to parse portably. Let's fallback to Method 2 if ioping isn't super standard,
-      # but if installed, let's assume standard format.
-      
-      # Let's actually use Method 2 (DD 4k DSYNC) as the robust script fallback
-      # because parsing ioping versions can be brittle in bash without regex.
-      USE_DD_LATENCY=true
-  else
-      USE_DD_LATENCY=true
-  fi
-
-  if [ "$USE_DD_LATENCY" = true ]; then
-      # METHOD 2: DD with 4k block + dsync (Robust fallback)
-      # oflag=dsync forces the data to physical disk before returning.
-      # bs=4k mimics a standard IO block.
-      
-      # Warmup
-      dd if=/dev/zero of="$LAT_FILE" bs=4k count=1 oflag=direct,dsync status=none 2>/dev/null
-      
-      # Measure
+  # 1. Warmup (do one run without counting time to wake up disks)
+  dd if=/dev/zero of="$LAT_FILE" bs=4k count=1 oflag=direct,dsync status=none 2>/dev/null
+  
+  # 2. Measurement Loop
+  for ((i=1; i<=LATENCY_TEST_COUNT; i++)); do
       start_l=$(get_time)
       # Perform a single 4k sync write
       dd if=/dev/zero of="$LAT_FILE" bs=4k count=1 oflag=direct,dsync status=none 2>/dev/null
       end_l=$(get_time)
       
-      # Calc duration in seconds -> convert to ms
-      lat_sec=$(calc_duration "$start_l" "$end_l")
-      LATENCY_MS=$(awk -v val="$lat_sec" 'BEGIN {printf "%.2f", val * 1000}')
-  fi
+      # Calc duration for this iteration
+      run_dur=$(calc_duration "$start_l" "$end_l")
+      
+      # Add to total
+      TOTAL_LAT_SEC=$(awk -v tot="$TOTAL_LAT_SEC" -v val="$run_dur" 'BEGIN {print tot + val}')
+  done
   
   rm -f "$LAT_FILE"
   
+  # 3. Calculate Average
+  # (Total Sec / Count) * 1000 = Avg ms
+  LATENCY_MS=$(awk -v tot="$TOTAL_LAT_SEC" -v count="$LATENCY_TEST_COUNT" 'BEGIN {printf "%.2f", (tot / count) * 1000}')
+
   # Check Threshold
   if (( $(awk -v lat="$LATENCY_MS" -v thresh="$LATENCY_THRESHOLD_MS" 'BEGIN {print (lat > thresh)}') )); then
       echo "FAILED (${LATENCY_MS}ms > ${LATENCY_THRESHOLD_MS}ms)"
       ALL_OK=false
-      DISK_RESULTS+=("$mount: R/W Speed OK | Latency: ${LATENCY_MS}ms (FAILED > ${LATENCY_THRESHOLD_MS}ms)")
+      DISK_RESULTS+=("$mount: R/W Speed OK | Latency: ${LATENCY_MS}ms (Avg) (FAILED > ${LATENCY_THRESHOLD_MS}ms)")
   else
       echo "OK (${LATENCY_MS}ms)"
-      DISK_RESULTS+=("$mount: Speed: W:${speed_w}MB/s R:${speed_r}MB/s | Latency: ${LATENCY_MS}ms")
+      DISK_RESULTS+=("$mount: Speed: W:${speed_w}MB/s R:${speed_r}MB/s | Latency: ${LATENCY_MS}ms (Avg)")
   fi
 
 done
@@ -304,7 +280,7 @@ echo
 # ====== 4. Stress Test (Burn-in) ======
 if [ "$ALL_OK" = true ] && [ "$ENABLE_BURN_IN" = true ]; then
     echo "========================================="
-    echo "      Starting 5-Minute Burn-in Test     "
+    echo "      Starting ${BURN_DURATION_SEC/60}-Minute Burn-in Test     "
     echo "========================================="
     echo "Duration: ${BURN_DURATION_SEC} seconds"
     echo "Target:   CPU, Memory, IO Stress + Download"
