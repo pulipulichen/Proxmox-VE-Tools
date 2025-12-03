@@ -10,8 +10,15 @@ set -euo pipefail
 # Default duration in hours if not provided
 DURATION_HOURS="${1:-72}"
 
+# Calculate duration in seconds
+DURATION_SEC=$((DURATION_HOURS * 3600))
+
+# For test
+# DURATION_SEC=30
+
 # Memory limit: Set the amount of virtual memory to use for stress testing.
 MEMORY_LIMIT="20G"
+# MEMORY_LIMIT="80%"
 
 # Timezone Configuration
 TIMEZONE="Asia/Taipei" # Default timezone for reports and timestamps
@@ -109,12 +116,6 @@ require_stress_ng
 
 # Create workspace for disk test
 mkdir -p "${WORK_DIR}"
-
-# Calculate duration in seconds
-DURATION_SEC=$((DURATION_HOURS * 3600))
-
-# For test
-# DURATION_SEC=10
 
 START_TIME_ISO=$(env TZ="${TIMEZONE}" date '+%Y-%m-%d %H:%M:%S')
 
