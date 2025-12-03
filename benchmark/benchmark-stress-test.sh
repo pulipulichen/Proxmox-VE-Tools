@@ -22,9 +22,11 @@ ENABLE_BURN_IN=true
 
 # Burn-in Configuration
 BURN_DURATION_SEC=300       # 5 Minutes
-# BURN_DURATION_SEC=10      # Uncomment for short testing
+# BURN_DURATION_SEC=30      # Uncomment for short testing
 DL_RATE_LIMIT="100m"        # 100MB/s
-BURN_IN_MEM_MAX="20G"
+
+#BURN_IN_MEM_MAX="20G"
+BURN_IN_MEM_MAX="80%"       # Max is 80%
 
 # Thresholds
 LATENCY_THRESHOLD_MS=20
@@ -367,10 +369,10 @@ if [ "$ALL_OK" = true ] && [ "$ENABLE_BURN_IN" = true ]; then
         # stress-ng HDD stress logic: 
         # If we have mount points, use temp dir. If only raw devices, use generic /tmp stress.
         stress-ng \
-            --hdd 2 \
+            --hdd 8 \
             --hdd-opts direct,wr-seq \
             --temp-path "${BURN_IN_DIR}" \
-            --cpu 2 --vm 1 --vm-bytes "1G" --timeout "${BURN_DURATION_SEC}s" --metrics-brief &
+            --cpu 0 --vm 1 --vm-bytes "${BURN_IN_MEM_MAX}" --timeout "${BURN_DURATION_SEC}s" --metrics-brief &
         
         BG_PIDS="$BG_PIDS $!"
         wait $! 2>/dev/null
