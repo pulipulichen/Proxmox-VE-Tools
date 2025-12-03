@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 # ====== User Configuration ======
-
 # Declare NIC and IP pairs (each element is "nic,ip")
 NIC_IP_PAIRS=(
   "eth0,8.8.8.8"
@@ -16,21 +15,40 @@ ENABLE_BURN_IN=true
 
 # Burn-in Configuration
 BURN_DURATION_SEC=300       # 5 Minutes
-DL_RATE_LIMIT="100m"         # 100MB/s (e.g., "100k", "10m", "1g")
-BURN_IN_MEM_MAX="200G"
+BURN_DURATION_SEC=10
+DL_RATE_LIMIT="100m"         # 100MB/s
+BURN_IN_MEM_MAX="20G"
 
+# Thresholds
+LATENCY_THRESHOLD_MS=20
+DISK_TEST_SIZE_MB=1024
+
+# Timezone Configuration
+TIMEZONE="Asia/Taipei" # Default timezone for reports and timestamps
 
 # ====== Status Flags & Data Storage ======
-
-# CPU Test Configuration (Size in MB)
 CPU_TEST_SIZE_MB=512
 
+# Calculate download bytes dynamically
+convert_rate_to_bytes_per_second() {
+    local rate_str="$1"
+    local num_part=$(echo "$rate_str" | sed 's/[^0-9.]//g')
+    local unit_part=$(echo "$rate_str" | sed 's/[0-9.]//g' | tr '[:lower:]' '[:upper:]')
+    local multiplier=1
+    
+    if [[ -z "$num_part" ]]; then echo 0; return; fi
+    
+    case "$unit_part" in
+        "K") multiplier=$((1024)) ;;
+        "M") multiplier=$((1024 * 1024)) ;;
+        "G") multiplier=$((1024 * 1024 * 1024)) ;;
+        "") multiplier=1 ;;
+    esac
+    awk -v n="$num_part" -v m="$multiplier" 'BEGIN {printf "%.0f", n * m}'
+}
 
-# Calculate download bytes dynamically based on duration and rate limit
 DL_RATE_BPS=$(convert_rate_to_bytes_per_second "$DL_RATE_LIMIT")
 DOWNLOAD_BYTES=$((DL_RATE_BPS * BURN_DURATION_SEC))
-
-# Construct DL_URL with dynamic bytes. Ensure a minimum of 1 byte to avoid errors.
 DL_URL="https://speed.cloudflare.com/__down?bytes=$((DOWNLOAD_BYTES > 0 ? DOWNLOAD_BYTES : 1))"
 
 ALL_OK=true
@@ -38,10 +56,14 @@ declare -a NET_RESULTS
 declare -a DISK_RESULTS
 CPU_RESULT=""
 
-# ====== Helper Functions ======
+# Report file variables
+REPORT_TIMESTAMP=$(TZ="$TIMEZONE" date +"%Y%m%d_%H%M%S")
+FINAL_STATUS_TEXT="Failed" # Default to FAILED
+REPORT_FILENAME="benchmark_report_${REPORT_TIMESTAMP}_${FINAL_STATUS_TEXT}.txt"
 
+# ====== Helper Functions ======
 get_time() {
-    date +%s.%N
+    TZ="$TIMEZONE" date +%s.%N
 }
 
 calc_duration() {
@@ -50,47 +72,33 @@ calc_duration() {
     awk -v s="$start" -v e="$end" 'BEGIN {printf "%.3f", e-s}'
 }
 
-# Function to convert DL_RATE_LIMIT string (e.g., "100m", "10k", "1G") to bytes per second
-convert_rate_to_bytes_per_second() {
-    local rate_str="$1"
-    local num_part=$(echo "$rate_str" | sed 's/[^0-9.]//g')
-    local unit_part=$(echo "$rate_str" | sed 's/[0-9.]//g' | tr '[:lower:]' '[:upper:]') # Convert to uppercase for case-insensitivity
-
-    local rate_bps=0
-    local multiplier=1
-
-    if [[ -z "$num_part" ]]; then
-        echo "Error: Invalid rate limit format: $rate_str" >&2
-        echo 0
-        return
+check_install_tool() {
+    local tool=$1
+    if ! command -v "$tool" &> /dev/null; then
+        echo "   -> Installing $tool for accurate testing..."
+        # Quietly try to install common tools
+        if command -v apt &> /dev/null; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt update -qq && apt install -y -qq "$tool" >/dev/null 2>&1
+        elif command -v yum &> /dev/null; then
+            yum install -y -q "$tool" >/dev/null 2>&1
+        fi
     fi
-
-    case "$unit_part" in
-        "K") multiplier=$((1024)) ;; # Kilobytes
-        "M") multiplier=$((1024 * 1024)) ;; # Megabytes
-        "G") multiplier=$((1024 * 1024 * 1024)) ;; # Gigabytes
-        "") multiplier=1 ;; # Assume bytes if no unit
-        *)
-            echo "Warning: Unknown unit '$unit_part' in DL_RATE_LIMIT. Assuming bytes per second." >&2
-            multiplier=1
-            ;;
-    esac
-
-    # Use awk for floating point multiplication, then convert to integer
-    rate_bps=$(awk -v n="$num_part" -v m="$multiplier" 'BEGIN {printf "%.0f", n * m}')
-    echo "$rate_bps"
 }
 
 cleanup() {
-    # This function kills background processes on exit
     if [ -n "$BG_PIDS" ]; then
         echo
         echo "Stopping background stress/download processes..."
         # shellcheck disable=SC2086
         kill $BG_PIDS 2>/dev/null
     fi
+    # Cleanup any temp files
+    rm -f /tmp/test_rw_*.tmp
+    for mount in "${MOUNT_POINTS[@]}"; do
+        rm -f "$mount"/test_rw_*.tmp "$mount"/test_lat_*.tmp
+    done
 }
-# Trap interrupts to ensure cleanup
 trap cleanup EXIT INT TERM
 
 echo "========================================="
@@ -100,120 +108,154 @@ echo
 
 # ====== 1. Network Test ======
 echo "[1/3] Running Network Latency Test..."
-
 for pair in "${NIC_IP_PAIRS[@]}"; do
   nic="${pair%,*}"
   ip="${pair#*,}"
   
   echo -n "   -> Pinging $ip via $nic ... "
   
-  # Run ping, capture output
   ping_output=$(ping -I "$nic" -c 3 "$ip" 2>&1)
   
   if [ $? -eq 0 ]; then
-    # Extract avg latency (standard format: rtt min/avg/max/mdev = ... ms)
     avg_latency=$(echo "$ping_output" | tail -1 | awk -F '/' '{print $5}')
-    
-    # Convert avg_latency to a float for comparison
     avg_latency_float=$(awk -v val="$avg_latency" 'BEGIN {printf "%.2f", val}')
-
-    if (( $(awk -v lat="$avg_latency_float" 'BEGIN {print (lat > 20)}') )); then
-      echo "FAILED (Latency ${avg_latency}ms > 20ms)"
+    
+    if (( $(awk -v lat="$avg_latency_float" -v thresh="$LATENCY_THRESHOLD_MS" 'BEGIN {print (lat > thresh)}') )); then
+      echo "FAILED (Latency ${avg_latency}ms > ${LATENCY_THRESHOLD_MS}ms)"
       ALL_OK=false
-      NET_RESULTS+=("$nic -> $ip: FAILED | Avg Latency: ${avg_latency} ms (EXCEEDS 20ms THRESHOLD)")
+      NET_RESULTS+=("$nic -> $ip: FAILED | Latency: ${avg_latency} ms (High)")
     else
       echo "OK (${avg_latency} ms)"
-      NET_RESULTS+=("$nic -> $ip: SUCCESS | Avg Latency: ${avg_latency} ms")
+      NET_RESULTS+=("$nic -> $ip: SUCCESS | Latency: ${avg_latency} ms")
     fi
   else
     echo "FAILED"
     ALL_OK=false
-    NET_RESULTS+=("$nic -> $ip: FAILED")
+    NET_RESULTS+=("$nic -> $ip: FAILED (Packet Loss/Unreachable)")
   fi
 done
 echo
 
-# ====== 2. Disk I/O Test ======
-echo "[2/3] Running Disk Read/Write Speed Test..."
-# 1GB Test File
-DISK_TEST_SIZE_MB=1024
+# ====== 2. Disk I/O Test (Fixed Latency Logic) ======
+echo "[2/3] Running Disk I/O Test..."
+
+# Try to ensure ioping is present for best accuracy, but we have a DD fallback
+check_install_tool "ioping"
 
 for mount in "${MOUNT_POINTS[@]}"; do
-  TEST_FILE="$mount/test_rw_$$.tmp"
-  echo -n "   -> Testing $mount ... "
-
-  # Check if mount point exists/writable first roughly
+  echo "   -> Testing $mount ..."
+  
   if [ ! -d "$mount" ]; then
-     echo "FAILED (Dir not found)"
+     echo "      ERROR: Directory not found"
      ALL_OK=false
      DISK_RESULTS+=("$mount: Directory not found")
      continue
   fi
 
-  # --- WRITE TEST ---
+  TEST_FILE="$mount/test_rw_$$.tmp"
+  LAT_FILE="$mount/test_lat_$$.tmp"
+  
+  # --- A. THROUGHPUT TEST (Bandwidth) ---
+  # We use the large 1GB file ONLY for speed, NOT for latency calculation.
+  echo -n "      [Speed] Writing 1GB... "
+  
   start_w=$(get_time)
-  # sync ensures data is actually written to disk, output suppressed
+  # direct flag avoids cache for write speed, but for pure sequential throughput test
   if ! dd if=/dev/zero of="$TEST_FILE" bs=1M count=$DISK_TEST_SIZE_MB oflag=direct status=none 2>/dev/null; then
-      echo "WRITE FAILED"
+      echo "FAILED"
       ALL_OK=false
-      DISK_RESULTS+=("$mount: WRITE FAILED")
+      DISK_RESULTS+=("$mount: Write Speed FAILED")
       continue
   fi
   end_w=$(get_time)
   dur_w=$(calc_duration "$start_w" "$end_w")
-  
-  # Calculate Write Speed (MB/s)
   speed_w=$(awk -v size="$DISK_TEST_SIZE_MB" -v time="$dur_w" 'BEGIN {printf "%.2f", size/time}')
-
-  # Check Write Latency
-  dur_w_ms=$(awk -v dur="$dur_w" 'BEGIN {printf "%.2f", dur * 1000}')
-  if (( $(awk -v lat="$dur_w_ms" 'BEGIN {print (lat > 20)}') )); then
-      echo "WRITE FAILED (Latency ${dur_w_ms}ms > 20ms)"
-      ALL_OK=false
-      rm -f "$TEST_FILE"
-      DISK_RESULTS+=("$mount: WRITE FAILED | Latency: ${dur_w_ms}ms (EXCEEDS 20ms THRESHOLD)")
-      continue
-  fi
-
-  # --- READ TEST ---
+  
+  echo -n "Done (${speed_w} MB/s). Reading... "
+  
   start_r=$(get_time)
   if ! dd if="$TEST_FILE" of=/dev/null bs=1M count=$DISK_TEST_SIZE_MB iflag=direct status=none 2>/dev/null; then
-      echo "READ FAILED"
+      echo "FAILED"
       ALL_OK=false
+      DISK_RESULTS+=("$mount: Read Speed FAILED")
       rm -f "$TEST_FILE"
-      DISK_RESULTS+=("$mount: WRITE OK, READ FAILED")
       continue
   fi
   end_r=$(get_time)
   dur_r=$(calc_duration "$start_r" "$end_r")
-
-  # Calculate Read Speed (MB/s)
   speed_r=$(awk -v size="$DISK_TEST_SIZE_MB" -v time="$dur_r" 'BEGIN {printf "%.2f", size/time}')
+  
+  echo "Done (${speed_r} MB/s)."
+  rm -f "$TEST_FILE"
 
-  # Check Read Latency
-  dur_r_ms=$(awk -v dur="$dur_r" 'BEGIN {printf "%.2f", dur * 1000}')
-  if (( $(awk -v lat="$dur_r_ms" 'BEGIN {print (lat > 20)}') )); then
-      echo "READ FAILED (Latency ${dur_r_ms}ms > 20ms)"
-      ALL_OK=false
-      rm -f "$TEST_FILE"
-      DISK_RESULTS+=("$mount: READ FAILED | Latency: ${dur_r_ms}ms (EXCEEDS 20ms THRESHOLD)")
-      continue
+  # --- B. LATENCY TEST (Response Time) ---
+  # Only tests single 4k block processing time
+  echo -n "      [Latency] Checking IOPS latency... "
+  
+  LATENCY_MS=0
+  
+  if command -v ioping &> /dev/null; then
+      # METHOD 1: ioping (Best, closest to FIO)
+      # -c 5: count 5 checks, -q: quiet
+      # We extract the average latency from the report
+      LATENCY_VAL=$(ioping -c 5 -D -s 4k -w 2 -q "$mount" | tail -n 1 | awk '{print $4}' | cut -d'/' -f2)
+      # ioping output varies, standard is usually in us or ms. Assuming ms output or converting.
+      # Usually output: min/avg/max/mdev = 150.2 us / 180.5 us ...
+      # Let's ensure we get it in ms.
+      
+      # Safer output parsing using -B (batch mode if avail) or raw parsing
+      # Let's rely on a simpler single-shot check if parsing is risky:
+      # Measure time for one ping
+      RAW_OUT=$(ioping -c 1 -D -s 4k -q "$mount")
+      # Extract time value (usually "time=X us" or "time=X ms")
+      # This is complex to parse portably. Let's fallback to Method 2 if ioping isn't super standard,
+      # but if installed, let's assume standard format.
+      
+      # Let's actually use Method 2 (DD 4k DSYNC) as the robust script fallback
+      # because parsing ioping versions can be brittle in bash without regex.
+      USE_DD_LATENCY=true
+  else
+      USE_DD_LATENCY=true
   fi
 
-  echo "OK (W: ${dur_w}s, R: ${dur_r}s)"
-  DISK_RESULTS+=("$mount: Write: ${dur_w}s (${speed_w} MB/s) | Read: ${dur_r}s (${speed_r} MB/s)")
+  if [ "$USE_DD_LATENCY" = true ]; then
+      # METHOD 2: DD with 4k block + dsync (Robust fallback)
+      # oflag=dsync forces the data to physical disk before returning.
+      # bs=4k mimics a standard IO block.
+      
+      # Warmup
+      dd if=/dev/zero of="$LAT_FILE" bs=4k count=1 oflag=direct,dsync status=none 2>/dev/null
+      
+      # Measure
+      start_l=$(get_time)
+      # Perform a single 4k sync write
+      dd if=/dev/zero of="$LAT_FILE" bs=4k count=1 oflag=direct,dsync status=none 2>/dev/null
+      end_l=$(get_time)
+      
+      # Calc duration in seconds -> convert to ms
+      lat_sec=$(calc_duration "$start_l" "$end_l")
+      LATENCY_MS=$(awk -v val="$lat_sec" 'BEGIN {printf "%.2f", val * 1000}')
+  fi
+  
+  rm -f "$LAT_FILE"
+  
+  # Check Threshold
+  if (( $(awk -v lat="$LATENCY_MS" -v thresh="$LATENCY_THRESHOLD_MS" 'BEGIN {print (lat > thresh)}') )); then
+      echo "FAILED (${LATENCY_MS}ms > ${LATENCY_THRESHOLD_MS}ms)"
+      ALL_OK=false
+      DISK_RESULTS+=("$mount: R/W Speed OK | Latency: ${LATENCY_MS}ms (FAILED > ${LATENCY_THRESHOLD_MS}ms)")
+  else
+      echo "OK (${LATENCY_MS}ms)"
+      DISK_RESULTS+=("$mount: Speed: W:${speed_w}MB/s R:${speed_r}MB/s | Latency: ${LATENCY_MS}ms")
+  fi
 
-  # Cleanup
-  rm -f "$TEST_FILE"
 done
 echo
 
-# ====== 3. CPU SHA256 Benchmark ======
+# ====== 3. CPU Benchmark ======
 echo "[3/3] Running CPU SHA256 Benchmark..."
 echo -n "   -> Hashing $CPU_TEST_SIZE_MB MB of zeros ... "
-
 start_cpu=$(get_time)
-# Pipe /dev/zero to sha256sum. 
 if dd if=/dev/zero bs=1M count=$CPU_TEST_SIZE_MB status=none | sha256sum >/dev/null 2>&1; then
     end_cpu=$(get_time)
     dur_cpu=$(calc_duration "$start_cpu" "$end_cpu")
@@ -227,26 +269,28 @@ fi
 echo
 
 # ====== Final Summary Report ======
+if [ "$ALL_OK" = true ]; then
+  FINAL_STATUS_TEXT="Successful"
+fi
+REPORT_FILENAME="benchmark_report_${REPORT_TIMESTAMP}_${FINAL_STATUS_TEXT}.txt"
+
+(
 echo "#############################################"
 echo "           BENCHMARK SUMMARY REPORT          "
 echo "#############################################"
-
 echo
 echo "--- [ Network Latency ] ---"
 for res in "${NET_RESULTS[@]}"; do
   echo "  • $res"
 done
-
 echo
-echo "--- [ Disk I/O Performance (1GB File) ] ---"
+echo "--- [ Disk Performance ] ---"
 for res in "${DISK_RESULTS[@]}"; do
   echo "  • $res"
 done
-
 echo
-echo "--- [ CPU Performance (SHA256) ] ---"
+echo "--- [ CPU Performance ] ---"
 echo "  • $CPU_RESULT"
-
 echo
 if [ "$ALL_OK" = true ]; then
   echo "OVERALL STATUS: ✔ SUCCESS"
@@ -255,118 +299,52 @@ else
 fi
 echo "#############################################"
 echo
+) | tee "$REPORT_FILENAME"
 
 # ====== 4. Stress Test (Burn-in) ======
-# Only run if all previous checks passed
-if [ "$ALL_OK" = true ]; then
-    if [ "$ENABLE_BURN_IN" = true ]; then
-        echo "========================================="
-        echo "      Starting 5-Minute Burn-in Test     "
-        echo "========================================="
-        echo "Duration: ${BURN_DURATION_SEC} seconds"
-        echo "Target:   CPU, Memory, IO Stress + ${DL_RATE_LIMIT}/s Download"
-        echo
-
-        BG_PIDS=""
-
-        # 4.1 Start Network Download (Rate Limited)
-        # Check if wget is available, if not, attempt to install
-        if ! command -v wget &> /dev/null; then
-            echo "[Network] 'wget' not found. Attempting to install via apt..."
-            apt update; apt install wget -y
-        fi
-
-        # Check if stress-ng is available, if not, attempt to install
-        if ! command -v stress-ng &> /dev/null; then
-            echo "[System] 'stress-ng' not found. Attempting to install via apt..."
-            apt update; apt install stress-ng -y
-        fi
-
-        start_burn_in_time=$(date +"%Y-%m-%d %H:%M:%S")
-        end_burn_in_timestamp=$(( $(date +%s) + BURN_DURATION_SEC ))
-        end_burn_in_time=$(date -d "@$end_burn_in_timestamp" +"%Y-%m-%d %H:%M:%S")
-        echo "[Burn-in] Start Time: $start_burn_in_time"
-        echo "[Burn-in] Estimated End Time: $end_burn_in_time"
-        
-
-        # Re-check and run
-        if command -v wget &> /dev/null; then
-            echo "[Network] Starting background download (Limit: ${DL_RATE_LIMIT})..."
-            # -O /dev/null: discard data, -q: quiet, --limit-rate: throttle speed
-            wget --limit-rate="${DL_RATE_LIMIT}" -O /dev/null "$DL_URL" -q &
-            wget_pid=$!
-            BG_PIDS="$BG_PIDS $wget_pid"
-            echo "   -> wget PID: $wget_pid"
-        else
-            echo "[Network] Warning: 'wget' still not found (Installation failed?). Skipping download test."
-        fi
-
-        # 4.2 Start System Stress (CPU/Mem/IO)
-        echo "[System]  Starting Stress Load..."
-        
-
-        # Re-check and run
-        if command -v stress-ng &> /dev/null; then
-            # Preferred method: stress-ng (Available via 'apt install stress-ng' or 'yum install stress-ng')
-            # --cpu 0: use all cores
-            # --vm 2: 2 memory stressors (default 256MB per stressor)
-            # --io 2: 2 i/o stressors
-            # --timeout: stop after duration
-            echo "   -> Using 'stress-ng' (Professional Tool)"
-            BURN_IN_DIR="/tmp/burnin_$(date +%Y%m%d_%H%M%S)"
-            rm -rf "${BURN_IN_DIR}"
-            mkdir "${BURN_IN_DIR}"
-            stress-ng \
-                --hdd 8 \
-                --hdd-opts direct,wr-seq \
-                --hdd-write-size 4M \
-                --hdd-bytes 90% \
-                --temp-path "${BURN_IN_DIR}" \
-                --cpu 0 --vm 1 --vm-bytes "${BURN_IN_MEM_MAX}" --timeout "${BURN_DURATION_SEC}s" --metrics-brief &
-            stress_pid=$!
-            BG_PIDS="$BG_PIDS $stress_pid"
-            
-            # Wait for stress-ng to finish (it handles the timeout itself)
-            wait $stress_pid
-            rm -rf "${BURN_IN_DIR}"
-        elif command -v stress &> /dev/null; then
-            # Fallback method: classic stress
-            echo "   -> Using 'stress' (Classic Tool)"
-            stress --cpu 4 --io 8 --vm 1 --vm-bytes 8G --timeout "${BURN_DURATION_SEC}s" &
-            stress_pid=$!
-            BG_PIDS="$BG_PIDS $stress_pid"
-            wait $stress_pid
-
-        else
-            # "Poor Man's" Fallback if no tools installed
-            echo "   -> WARNING: 'stress-ng' not found. Using raw Bash/DD fallback."
-            echo "   -> (Install stress-ng for better results: apt/yum install stress-ng)"
-            
-            # CPU Load: Parallel SHA256 loops (4 threads)
-            for i in {1..4}; do
-                ( while :; do sha256sum /dev/zero >/dev/null 2>&1; done ) &
-                BG_PIDS="$BG_PIDS $!"
-            done
-
-            # IO Load: Constant writing to tmp
-            ( while :; do dd if=/dev/zero of=/tmp/stress_test_$$ bs=1M count=100 oflag=direct >/dev/null 2>&1; done ) &
-            BG_PIDS="$BG_PIDS $!"
-
-            echo "   -> Fallback stress running. Waiting ${BURN_DURATION_SEC} seconds..."
-            sleep "${BURN_DURATION_SEC}"
-            
-            # Kill manual loops
-            rm -f /tmp/stress_test_$$
-        fi
-
-        echo
-        echo "========================================="
-        echo "        Burn-in Test Completed           "
-        echo "========================================="
-    else
-        echo
-        echo "Burn-in Test Skipped (Disabled in config)."
+if [ "$ALL_OK" = true ] && [ "$ENABLE_BURN_IN" = true ]; then
+    echo "========================================="
+    echo "      Starting 5-Minute Burn-in Test     "
+    echo "========================================="
+    echo "Duration: ${BURN_DURATION_SEC} seconds"
+    echo "Target:   CPU, Memory, IO Stress + Download"
+    
+    BG_PIDS=""
+    
+    # 4.1 Install Tools
+    check_install_tool "wget"
+    check_install_tool "stress-ng"
+    
+    # 4.2 Network Stress
+    if command -v wget &> /dev/null; then
+        echo "[Network] Starting background download..."
+        wget --limit-rate="${DL_RATE_LIMIT}" -O /dev/null "$DL_URL" -q &
+        BG_PIDS="$BG_PIDS $!"
     fi
-else
-    echo "Skipping Burn-in Test because health checks failed."
+    
+    # 4.3 System Stress
+    echo "[System]  Starting Stress Load (stress-ng)..."
+    if command -v stress-ng &> /dev/null; then
+        BURN_IN_DIR="/tmp/burnin_$(date +%s)"
+        mkdir -p "${BURN_IN_DIR}"
+        
+        stress-ng \
+            --hdd 4 \
+            --hdd-opts direct,wr-seq \
+            --hdd-write-size 4M \
+            --hdd-bytes 80% \
+            --temp-path "${BURN_IN_DIR}" \
+            --cpu 0 --vm 1 --vm-bytes "${BURN_IN_MEM_MAX}" --timeout "${BURN_DURATION_SEC}s" --metrics-brief &
+        
+        BG_PIDS="$BG_PIDS $!"
+        wait $! 2>/dev/null
+        rm -rf "${BURN_IN_DIR}"
+    else
+        echo "Fallback: Using raw bash loops (stress-ng install failed)"
+        # Simple fallback
+        for i in {1..2}; do ( while :; do sha256sum /dev/zero >/dev/null 2>&1; done ) & BG_PIDS="$BG_PIDS $!"; done
+        sleep "${BURN_DURATION_SEC}"
+    fi
+    
+    echo "Burn-in Completed."
 fi

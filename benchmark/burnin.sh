@@ -1,197 +1,167 @@
 #!/usr/bin/env bash
-# Burn-in test script for Ubuntu 24.04
-# Stress CPU, memory, and disk (read/write/delete files under /tmp)
-# Default duration: 72 hours
+# Burn-in test script for Ubuntu 24.04 (Merged Version)
+# Combines CPU, Memory, and Disk stress into a single stress-ng process
+# Generates a timestamped report upon completion.
 
 set -euo pipefail
 
 # -------- Configuration --------
 
-# Default duration in hours if not provided as first argument
+# Default duration in hours if not provided
 DURATION_HOURS="${1:-72}"
 
-# Disk test working directory
-DISK_WORK_DIR="/tmp/burnin_disk_test"
+# Memory limit: Set the amount of virtual memory to use for stress testing.
+MEMORY_LIMIT="20G"
 
-# Size of test file in MiB (1024 = 1 GiB)
-DISK_TEST_SIZE_MB=1024
+# Timezone Configuration
+TIMEZONE="Asia/Taipei" # Default timezone for reports and timestamps
 
-# -------- Helper functions --------
+# -------- Internal Configuration --------- 
+
+# Directory for disk stress temporary files
+WORK_DIR="/tmp/burnin_workspace"
+
+# Log directory
+LOG_DIR="."
+mkdir -p "${LOG_DIR}"
+
+# Raw log from stress-ng (temporary)
+RAW_LOG="${LOG_DIR}/stress_ng_raw.log"
+
+# -------- Helper Functions --------
 
 log() {
-    # Print log message with timestamp
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+    echo "[$(env TZ="${TIMEZONE}" date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
 require_stress_ng() {
-    # Ensure stress-ng is installed, try to install if missing
     if command -v stress-ng >/dev/null 2>&1; then
         return 0
     fi
-
-    log "stress-ng is not installed. Trying to install via apt..."
-
-    if [[ "$(id -u)" -ne 0 ]]; then
-        log "ERROR: Need root privileges to install stress-ng. Run this script with sudo or as root."
-        exit 1
-    fi
-
-    apt-get update -y
-    apt-get install -y stress-ng
-
-    if ! command -v stress-ng >/dev/null 2>&1; then
-        log "ERROR: Failed to install stress-ng."
-        exit 1
-    fi
-
-    log "stress-ng installed successfully."
+    log "stress-ng not found. Installing..."
+    apt-get update -y && apt-get install -y stress-ng
 }
 
-calc_end_time() {
-    # Calculate end timestamp in seconds since epoch
-    local duration_seconds=$((DURATION_HOURS * 3600))
-    END_TIME_EPOCH=$(( $(date +%s) + duration_seconds ))
+cleanup() {
+    log "Cleaning up temporary files..."
+    rm -rf "${WORK_DIR}"
 }
 
-cpu_mem_stress_start() {
-    # Start CPU and memory stress using stress-ng
-    local cpu_workers vm_workers duration_seconds
+generate_final_report() {
+    local exit_code=$1
+    local end_time_iso
+    end_time_iso=$(env TZ="${TIMEZONE}" date '+%Y-%m-%d %H:%M:%S')
+    local timestamp_filename
+    timestamp_filename=$(env TZ="${TIMEZONE}" date '+%Y%m%d-%H%M%S')
+    
+    local report_file="${LOG_DIR}/burnin_report_${timestamp_filename}.txt"
 
-    cpu_workers="$(nproc)"
-    vm_workers=$(( cpu_workers / 2 ))
-    (( vm_workers < 1 )) && vm_workers=1
+    log "Generating final report at: ${report_file}"
 
-    duration_seconds=$((DURATION_HOURS * 3600))
-
-    log "Starting CPU and memory stress:"
-    log "  CPU workers: ${cpu_workers}"
-    log "  VM workers:  ${vm_workers}"
-    log "  Duration:    ${DURATION_HOURS} hours"
-
-    # Fixed memory usage for vm workers
-    local fixed_mem_usage_percent="4%"
-
-    # --vm-bytes uses fixed_mem_usage_percent of total memory for each vm worker
-    # --timeout avoids runaway if the script fails to stop it
-    stress-ng \
-        --cpu "${cpu_workers}" \
-        --vm "${vm_workers}" \
-        --vm-bytes "${fixed_mem_usage_percent}" \
-        --timeout "${duration_seconds}s" \
-        --metrics-brief &
-    CPU_MEM_PID=$!
-
-    log "CPU/MEM stress-ng PID: ${CPU_MEM_PID}"
-}
-
-disk_stress_loop() {
-    # Disk stress loop: repeatedly write, read, verify, and delete files under /tmp
-    local file_path
-    file_path="${DISK_WORK_DIR}/disk_test.bin"
-
-    log "Starting disk stress in ${DISK_WORK_DIR} with file size ${DISK_TEST_SIZE_MB} MiB."
-
-    mkdir -p "${DISK_WORK_DIR}"
-
-    local round=0
-    while :; do
-        local now
-        now="$(date +%s)"
-        if (( now >= END_TIME_EPOCH )); then
-            log "Disk stress reached end of test duration."
-            break
+    {
+        echo "======================================================="
+        echo "              BURN-IN TEST REPORT                      "
+        echo "======================================================="
+        echo "System Hostname : $(hostname)"
+        echo "Operating System: $(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"')"
+        echo "Kernel Version  : $(uname -r)"
+        echo "-------------------------------------------------------"
+        echo "Start Time      : ${START_TIME_ISO}"
+        echo "End Time        : ${end_time_iso}"
+        echo "Target Duration : ${DURATION_HOURS} Hours"
+        echo "-------------------------------------------------------"
+        echo "Stress Configuration:"
+        echo "  - CPU Workers : All Cores"
+        echo "  - VM Workers  : 2 (utilizing ~80% RAM total)"
+        echo "  - HDD Workers : 1 (Read/Write/Verify/Delete)"
+        echo "  - Work Dir    : ${WORK_DIR}"
+        echo "-------------------------------------------------------"
+        echo "Test Result Status:"
+        if [ "$exit_code" -eq 0 ]; then
+            echo "  [ SUCCESS ] Completed full duration without stress-ng error."
+        else
+            echo "  [ WARNING ] Process exited with code ${exit_code} (Interrupted or Failed)."
         fi
-
-        round=$((round + 1))
-        log "Disk stress round #${round}: performing disk I/O using stress-ng for ${DISK_TEST_SIZE_MB} MiB"
-
-        # Use stress-ng for disk I/O (write, read, verify, unlink)
-        # --hdd-write-bytes, --hdd-read-bytes: specify the amount of data to write/read
-        # --hdd-unlink: delete the file after operations
-        # --hdd-verify: verify data integrity
-        # --timeout 0: run until killed by parent process (handled by main_loop)
-        stress-ng \
-            --disk 1 \
-            --dir "${DISK_WORK_DIR}" \
-            --hdd-write-bytes "${DISK_TEST_SIZE_MB}M" \
-            --hdd-read-bytes "${DISK_TEST_SIZE_MB}M" \
-            --hdd-verify \
-            --hdd-unlink \
-            --timeout 0 &
-        STRESS_NG_DISK_PID=$!
-
-        # Wait for the stress-ng disk worker to complete its cycle or for the overall test duration to end
-        # We use wait and then check the end time again to ensure we don't wait indefinitely if stress-ng finishes quickly
-        wait "${STRESS_NG_DISK_PID}" || true
-
-        # Clean up any remaining stress-ng processes if they were interrupted
-        kill "${STRESS_NG_DISK_PID}" 2>/dev/null || true
-    done
-}
-
-disk_stress_start() {
-    # Run disk stress loop in background
-    disk_stress_loop &
-    DISK_PID=$!
-    log "Disk stress PID: ${DISK_PID}"
-}
-
-stop_all() {
-    # Stop all background workers
-    log "Stopping all stress workers..."
-
-    if [[ -n "${CPU_MEM_PID:-}" ]]; then
-        kill "${CPU_MEM_PID}" 2>/dev/null || true
-    fi
-
-    if [[ -n "${DISK_PID:-}" ]]; then
-        kill "${DISK_PID}" 2>/dev/null || true
-    fi
-
-    if [[ -n "${STRESS_NG_DISK_PID:-}" ]]; then
-        kill "${STRESS_NG_DISK_PID}" 2>/dev/null || true
-    fi
-
-    wait "${CPU_MEM_PID:-}" "${DISK_PID:-}" "${STRESS_NG_DISK_PID:-}" 2>/dev/null || true || true || true
-
-    log "All stress workers stopped."
-}
-
-setup_signal_traps() {
-    # Handle Ctrl+C or termination signals
-    trap 'log "Received SIGINT. Cleaning up..."; stop_all; exit 1' INT
-    trap 'log "Received SIGTERM. Cleaning up..."; stop_all; exit 1' TERM
-}
-
-main_loop() {
-    # Main loop: wait until time is reached
-    log "Burn-in test running for ${DURATION_HOURS} hours..."
-    while :; do
-        local now
-        now="$(date +%s)"
-        if (( now >= END_TIME_EPOCH )); then
-            log "Reached end of test duration (${DURATION_HOURS} hours)."
-            break
+        echo "-------------------------------------------------------"
+        echo "stress-ng Output / Metrics:"
+        echo ""
+        if [ -f "${RAW_LOG}" ]; then
+            cat "${RAW_LOG}"
+        else
+            echo "  (No raw log data available)"
         fi
-        sleep 10
-    done
+        echo ""
+        echo "======================================================="
+    } > "${report_file}"
+
+    log "Report generated successfully."
+    echo "Report saved to: ${report_file}"
 }
 
-# -------- Main --------
+# -------- Main Execution --------
 
-log "Starting 72h burn-in (or custom duration) on Ubuntu 24.04."
-log "Requested duration: ${DURATION_HOURS} hours."
+if [[ "$(id -u)" -ne 0 ]]; then
+    echo "Error: This script must be run as root."
+    exit 1
+fi
 
 require_stress_ng
-calc_end_time
-setup_signal_traps
 
-cpu_mem_stress_start
-disk_stress_start
+# Create workspace for disk test
+mkdir -p "${WORK_DIR}"
 
-main_loop
+# Calculate duration in seconds
+DURATION_SEC=$((DURATION_HOURS * 3600))
 
-stop_all
+# For test
+# DURATION_SEC=10
 
-log "Burn-in test completed successfully."
-exit 0
+START_TIME_ISO=$(env TZ="${TIMEZONE}" date '+%Y-%m-%d %H:%M:%S')
+
+log "Starting Burn-in Test (Merged Mode)"
+log "Duration: ${DURATION_HOURS} hours (${DURATION_SEC} seconds)"
+log "Logs will be stored in: ${LOG_DIR}"
+
+# Trap signals to ensure report is generated even if user cancels (Ctrl+C)
+trap 'log "Test interrupted by user!"; generate_final_report 130; cleanup; exit 1' INT TERM
+
+# ----------------------------------------------------------------
+# THE MERGED STRESS-NG COMMAND
+# ----------------------------------------------------------------
+# Explanation of flags:
+# --cpu 0           : Use all available CPU cores.
+# --vm 2            : Start 2 memory stressors.
+# --vm-bytes 20G    : Limit VM memory usage.
+# --hdd 1           : Start 1 disk stressor.
+# --verify          : Enable data verification (replaces old wr-check opts).
+# --temp-path       : Where to write the disk stress files.
+# --timeout         : Stop after X seconds.
+# --metrics-brief   : Output summary metrics at the end.
+# --log-file        : Save output to file.
+# ----------------------------------------------------------------
+
+stress-ng \
+    --cpu 0 \
+    --vm 2 \
+    --vm-bytes "${MEMORY_LIMIT}" \
+    --hdd 1 \
+    --verify \
+    --temp-path "${WORK_DIR}" \
+    --timeout "${DURATION_SEC}s" \
+    --metrics-brief \
+    --log-file "${RAW_LOG}" \
+    --verbose
+
+EXIT_CODE=$?
+
+# -------- Post-Processing --------
+
+generate_final_report "$EXIT_CODE"
+cleanup
+
+if [ "$EXIT_CODE" -eq 0 ]; then
+    log "Burn-in test finished successfully."
+else
+    log "Burn-in test finished with errors (Code: $EXIT_CODE)."
+    exit "$EXIT_CODE"
+fi
