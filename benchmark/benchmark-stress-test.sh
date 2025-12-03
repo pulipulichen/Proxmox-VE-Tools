@@ -66,10 +66,14 @@ CPU_RESULT=""
 
 REPORT_TIMESTAMP=$(TZ="$TIMEZONE" date +"%Y%m%d_%H%M%S")
 FINAL_STATUS_TEXT="Failed"
+# We will define the full path later in the summary section
 REPORT_FILENAME="benchmark_report_${REPORT_TIMESTAMP}_${FINAL_STATUS_TEXT}.txt"
 
 # ====== Helper Functions ======
 get_time() { TZ="$TIMEZONE" date +%s.%N; }
+
+# Get the absolute path of the script directory
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 
 calc_duration() {
     start=$1; end=$2
@@ -321,7 +325,9 @@ echo
 
 # ====== Final Summary ======
 if [ "$ALL_OK" = true ]; then FINAL_STATUS_TEXT="Successful"; fi
-REPORT_FILENAME="benchmark_report_${REPORT_TIMESTAMP}_${FINAL_STATUS_TEXT}.txt"
+
+# Update report filename to use Script Directory absolute path
+REPORT_FILENAME="${SCRIPT_DIR}/benchmark_report_${REPORT_TIMESTAMP}_${FINAL_STATUS_TEXT}.txt"
 
 (
 echo "#############################################"
@@ -345,8 +351,14 @@ fi
 echo "#############################################"
 ) | tee "$REPORT_FILENAME"
 
+echo
+echo "Report saved to: $REPORT_FILENAME"
+echo
+
 # ====== 4. Stress Test ======
 if [ "$ALL_OK" = true ] && [ "$ENABLE_BURN_IN" = true ]; then
+    (
+    echo
     echo "========================================="
     echo "      Starting Burn-in Test              "
     echo "========================================="
@@ -360,6 +372,12 @@ if [ "$ALL_OK" = true ] && [ "$ENABLE_BURN_IN" = true ]; then
         wget --limit-rate="${DL_RATE_LIMIT}" -O /dev/null "$DL_URL" -q &
         BG_PIDS="$BG_PIDS $!"
     fi
+
+    BURN_START_TIME=$(TZ="$TIMEZONE" date +"%Y-%m-%d %H:%M:%S")
+    BURN_END_TIMESTAMP=$(( $(date +%s) + BURN_DURATION_SEC ))
+    BURN_END_TIME=$(TZ="$TIMEZONE" date -d "@${BURN_END_TIMESTAMP}" +"%Y-%m-%d %H:%M:%S")
+    echo "[Time]    Burn-in Start: ${BURN_START_TIME}"
+    echo "[Time]    Burn-in End (Estimated): ${BURN_END_TIME} (Duration: ${BURN_DURATION_SEC} seconds)"
     
     echo "[System]  Starting Stress Load..."
     if command -v stress-ng &> /dev/null; then
@@ -383,4 +401,6 @@ if [ "$ALL_OK" = true ] && [ "$ENABLE_BURN_IN" = true ]; then
         sleep "${BURN_DURATION_SEC}"
     fi
     echo "Burn-in Completed."
+    echo "========================================="
+    ) | tee -a "$REPORT_FILENAME"
 fi
