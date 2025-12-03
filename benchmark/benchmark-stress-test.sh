@@ -10,7 +10,7 @@ NIC_IP_PAIRS=(
 # Test Targets: Can be Mount Points (Directories) OR Raw Devices (Block Devices)
 # Examples: "/mnt/vol1" (Safe, file-based) OR "/dev/sda" (Raw, read-only by default)
 TEST_TARGETS=("/mnt/vol1" "/mnt/vol2")
-# TEST_TARGETS=("/dev/sda" "/dev/sdb") # Example for raw devices
+#TEST_TARGETS=("/dev/sda" "/dev/sdb") # Example for raw devices
 
 # Safety Switch for Raw Devices (/dev/sdX)
 # true = Allow destructive write tests on raw devices (WARNING: WIPES DATA)
@@ -22,7 +22,7 @@ ENABLE_BURN_IN=true
 
 # Burn-in Configuration
 BURN_DURATION_SEC=300       # 5 Minutes
-# BURN_DURATION_SEC=30      # Uncomment for short testing
+#BURN_DURATION_SEC=30      # Uncomment for short testing
 DL_RATE_LIMIT="100m"        # 100MB/s
 
 #BURN_IN_MEM_MAX="20G"
