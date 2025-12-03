@@ -292,10 +292,14 @@ if [ "$ALL_OK" = true ] && [ "$ENABLE_BURN_IN" = true ]; then
     check_install_tool "stress-ng"
     
     # 4.2 Network Stress
-    if command -v wget &> /dev/null; then
+    if [ ${#NIC_IP_PAIRS[@]} -eq 0 ]; then
+        echo "[Network] Skipping background download: NIC_IP_PAIRS is empty."
+    elif command -v wget &> /dev/null; then
         echo "[Network] Starting background download..."
         wget --limit-rate="${DL_RATE_LIMIT}" -O /dev/null "$DL_URL" -q &
         BG_PIDS="$BG_PIDS $!"
+    else
+        echo "[Network] Skipping background download: wget not found."
     fi
     
     # 4.3 System Stress
