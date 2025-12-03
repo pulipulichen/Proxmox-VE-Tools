@@ -15,7 +15,7 @@ TEST_TARGETS=("/mnt/vol1" "/mnt/vol2")
 # Safety Switch for Raw Devices (/dev/sdX)
 # true = Allow destructive write tests on raw devices (WARNING: WIPES DATA)
 # false = Read-only tests for raw devices, full RW for mount points
-ALLOW_RAW_WRITE=false
+ALLOW_RAW_WRITE=true
 
 # Enable/Disable Burn-in Stress Test (true/false)
 ENABLE_BURN_IN=true
