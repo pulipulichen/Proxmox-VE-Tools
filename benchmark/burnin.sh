@@ -103,24 +103,29 @@ disk_stress_loop() {
         fi
 
         round=$((round + 1))
-        log "Disk stress round #${round}: writing ${DISK_TEST_SIZE_MB} MiB to ${file_path}"
+        log "Disk stress round #${round}: performing disk I/O using stress-ng for ${DISK_TEST_SIZE_MB} MiB"
 
-        # Write random data to file
-        dd if=/dev/urandom of="${file_path}" bs=1M count="${DISK_TEST_SIZE_MB}" conv=fsync,status=none
+        # Use stress-ng for disk I/O (write, read, verify, unlink)
+        # --hdd-write-bytes, --hdd-read-bytes: specify the amount of data to write/read
+        # --hdd-unlink: delete the file after operations
+        # --hdd-verify: verify data integrity
+        # --timeout 0: run until killed by parent process (handled by main_loop)
+        stress-ng \
+            --disk 1 \
+            --dir "${DISK_WORK_DIR}" \
+            --hdd-write-bytes "${DISK_TEST_SIZE_MB}M" \
+            --hdd-read-bytes "${DISK_TEST_SIZE_MB}M" \
+            --hdd-verify \
+            --hdd-unlink \
+            --timeout 0 &
+        STRESS_NG_DISK_PID=$!
 
-        sync
+        # Wait for the stress-ng disk worker to complete its cycle or for the overall test duration to end
+        # We use wait and then check the end time again to ensure we don't wait indefinitely if stress-ng finishes quickly
+        wait "${STRESS_NG_DISK_PID}" || true
 
-        # Read file back
-        log "Disk stress round #${round}: reading file"
-        dd if="${file_path}" of=/dev/null bs=1M status=none
-
-        # Verify with checksum (sha256)
-        log "Disk stress round #${round}: verifying file with sha256sum"
-        sha256sum "${file_path}" >/dev/null
-
-        # Delete file
-        log "Disk stress round #${round}: deleting file"
-        rm -f "${file_path}"
+        # Clean up any remaining stress-ng processes if they were interrupted
+        kill "${STRESS_NG_DISK_PID}" 2>/dev/null || true
     done
 }
 
@@ -143,7 +148,11 @@ stop_all() {
         kill "${DISK_PID}" 2>/dev/null || true
     fi
 
-    wait "${CPU_MEM_PID:-}" "${DISK_PID:-}" 2>/dev/null || true || true
+    if [[ -n "${STRESS_NG_DISK_PID:-}" ]]; then
+        kill "${STRESS_NG_DISK_PID}" 2>/dev/null || true
+    fi
+
+    wait "${CPU_MEM_PID:-}" "${DISK_PID:-}" "${STRESS_NG_DISK_PID:-}" 2>/dev/null || true || true || true
 
     log "All stress workers stopped."
 }

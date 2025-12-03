@@ -14,14 +14,17 @@ MOUNT_POINTS=("/mnt/vol1" "/mnt/vol2")
 # Enable/Disable Burn-in Stress Test (true/false)
 ENABLE_BURN_IN=true
 
+# Burn-in Configuration
+BURN_DURATION_SEC=300       # 5 Minutes
+DL_RATE_LIMIT="100m"         # 100MB/s (e.g., "100k", "10m", "1g")
+BURN_IN_MEM_MAX="200G"
+
+
 # ====== Status Flags & Data Storage ======
 
 # CPU Test Configuration (Size in MB)
 CPU_TEST_SIZE_MB=512
 
-# Burn-in Configuration
-BURN_DURATION_SEC=600       # 5 Minutes
-DL_RATE_LIMIT="100m"         # 100MB/s (e.g., "100k", "10m", "1g")
 
 # Calculate download bytes dynamically based on duration and rate limit
 DL_RATE_BPS=$(convert_rate_to_bytes_per_second "$DL_RATE_LIMIT")
@@ -110,8 +113,18 @@ for pair in "${NIC_IP_PAIRS[@]}"; do
   if [ $? -eq 0 ]; then
     # Extract avg latency (standard format: rtt min/avg/max/mdev = ... ms)
     avg_latency=$(echo "$ping_output" | tail -1 | awk -F '/' '{print $5}')
-    echo "OK (${avg_latency} ms)"
-    NET_RESULTS+=("$nic -> $ip: SUCCESS | Avg Latency: ${avg_latency} ms")
+    
+    # Convert avg_latency to a float for comparison
+    avg_latency_float=$(awk -v val="$avg_latency" 'BEGIN {printf "%.2f", val}')
+
+    if (( $(awk -v lat="$avg_latency_float" 'BEGIN {print (lat > 20)}') )); then
+      echo "FAILED (Latency ${avg_latency}ms > 20ms)"
+      ALL_OK=false
+      NET_RESULTS+=("$nic -> $ip: FAILED | Avg Latency: ${avg_latency} ms (EXCEEDS 20ms THRESHOLD)")
+    else
+      echo "OK (${avg_latency} ms)"
+      NET_RESULTS+=("$nic -> $ip: SUCCESS | Avg Latency: ${avg_latency} ms")
+    fi
   else
     echo "FAILED"
     ALL_OK=false
@@ -152,6 +165,16 @@ for mount in "${MOUNT_POINTS[@]}"; do
   # Calculate Write Speed (MB/s)
   speed_w=$(awk -v size="$DISK_TEST_SIZE_MB" -v time="$dur_w" 'BEGIN {printf "%.2f", size/time}')
 
+  # Check Write Latency
+  dur_w_ms=$(awk -v dur="$dur_w" 'BEGIN {printf "%.2f", dur * 1000}')
+  if (( $(awk -v lat="$dur_w_ms" 'BEGIN {print (lat > 20)}') )); then
+      echo "WRITE FAILED (Latency ${dur_w_ms}ms > 20ms)"
+      ALL_OK=false
+      rm -f "$TEST_FILE"
+      DISK_RESULTS+=("$mount: WRITE FAILED | Latency: ${dur_w_ms}ms (EXCEEDS 20ms THRESHOLD)")
+      continue
+  fi
+
   # --- READ TEST ---
   start_r=$(get_time)
   if ! dd if="$TEST_FILE" of=/dev/null bs=1M count=$DISK_TEST_SIZE_MB iflag=direct status=none 2>/dev/null; then
@@ -166,6 +189,16 @@ for mount in "${MOUNT_POINTS[@]}"; do
 
   # Calculate Read Speed (MB/s)
   speed_r=$(awk -v size="$DISK_TEST_SIZE_MB" -v time="$dur_r" 'BEGIN {printf "%.2f", size/time}')
+
+  # Check Read Latency
+  dur_r_ms=$(awk -v dur="$dur_r" 'BEGIN {printf "%.2f", dur * 1000}')
+  if (( $(awk -v lat="$dur_r_ms" 'BEGIN {print (lat > 20)}') )); then
+      echo "READ FAILED (Latency ${dur_r_ms}ms > 20ms)"
+      ALL_OK=false
+      rm -f "$TEST_FILE"
+      DISK_RESULTS+=("$mount: READ FAILED | Latency: ${dur_r_ms}ms (EXCEEDS 20ms THRESHOLD)")
+      continue
+  fi
 
   echo "OK (W: ${dur_w}s, R: ${dur_r}s)"
   DISK_RESULTS+=("$mount: Write: ${dur_w}s (${speed_w} MB/s) | Read: ${dur_r}s (${speed_r} MB/s)")
@@ -289,7 +322,7 @@ if [ "$ALL_OK" = true ]; then
                 --hdd-write-size 4M \
                 --hdd-bytes 90% \
                 --temp-path "${BURN_IN_DIR}" \
-                --cpu 0 --vm 1 --vm-bytes 5% --timeout "${BURN_DURATION_SEC}s" --metrics-brief &
+                --cpu 0 --vm 1 --vm-bytes "${BURN_IN_MEM_MAX}" --timeout "${BURN_DURATION_SEC}s" --metrics-brief &
             stress_pid=$!
             BG_PIDS="$BG_PIDS $stress_pid"
             
