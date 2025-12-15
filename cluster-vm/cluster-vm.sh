@@ -4,7 +4,8 @@
 if [ "$#" -ne 2 ]; then
     echo "Usage: $0 <vmid_list_file> <action_or_setting>"
     echo "Example: $0 vms.txt 'start'"
-    echo "Example: $0 vms.txt 'set --cpu host --cores 4'"
+    echo "Example: $0 vms.txt 'set --cpu host --cores 4' (For VMs)"
+    echo "Example: $0 vms.txt 'set --cores 2' (For CTs)"
     exit 1
 fi
 
@@ -17,9 +18,10 @@ if [ ! -f "$VMID_LIST_FILE" ]; then
     exit 1
 fi
 
-# 預先獲取叢集資源列表，避免每次循環都查詢 API (提升效能)
+# 預先獲取叢集資源列表
+# 移除 --type vm 以獲取所有資源 (包含 qemu 和 lxc)
 echo "Fetching cluster resources..."
-CLUSTER_RESOURCES=$(pvesh get /cluster/resources --type vm --output-format json)
+CLUSTER_RESOURCES=$(pvesh get /cluster/resources --output-format json)
 
 # 讀取 VMID 列表
 while IFS= read -r VMID; do
@@ -28,56 +30,65 @@ while IFS= read -r VMID; do
         continue
     fi
 
-    # 1. 查找 VM 所在的節點 (Node)
-    # 使用 python 來解析 JSON 是因為大多數 PVE 預裝了 python3 但不一定有 jq
-    # 這裡從 CLUSTER_RESOURCES 中篩選出對應 VMID 的 node 欄位
-    NODE=$(echo "$CLUSTER_RESOURCES" | python3 -c "import sys, json; 
+    # 1. 查找 ID 所在的節點 (Node) 與 類型 (Type)
+    # 使用 Python 解析 JSON，同時回傳 node 和 type (例如: "pve1 qemu" 或 "pve2 lxc")
+    RESOURCE_INFO=$(echo "$CLUSTER_RESOURCES" | python3 -c "import sys, json; 
 data = json.load(sys.stdin); 
-match = next((item for item in data if item['vmid'] == $VMID), None); 
-print(match['node']) if match else print('')")
+# 查找 vmid 匹配的項目 (注意 vmid 在 json 中通常是數字，這裡做寬鬆比對)
+match = next((item for item in data if str(item.get('vmid')) == '$VMID'), None); 
+if match: print(f\"{match['node']} {match['type']}\")")
 
-    if [ -z "$NODE" ]; then
-        echo "Error: VMID $VMID not found in cluster resources. Skipping."
+    if [ -z "$RESOURCE_INFO" ]; then
+        echo "Error: ID $VMID not found in cluster resources. Skipping."
         continue
     fi
 
-    echo "Processing VMID: $VMID on Node: $NODE -> Action: $ACTION_STRING"
+    # 讀取節點和類型
+    read -r NODE TYPE <<< "$RESOURCE_INFO"
+
+    # 驗證類型是否支援
+    if [[ "$TYPE" != "qemu" && "$TYPE" != "lxc" ]]; then
+        echo "Warning: ID $VMID has type '$TYPE' which is not supported by this script (only qemu or lxc). Skipping."
+        continue
+    fi
+
+    echo "Processing $TYPE ID: $VMID on Node: $NODE -> Action: $ACTION_STRING"
 
     # 2. 根據操作類型構建 pvesh 命令
-    # pvesh 的語法是: pvesh <HTTP_METHOD> <API_PATH> [OPTIONS]
+    # 路徑結構: /nodes/{node}/{type}/{vmid}/...
+    # TYPE 變數會是 'qemu' 或 'lxc'，剛好對應 API 路徑
     
     case "$ACTION_STRING" in
         "set "*)
             # 配置修改 (Config)
-            # API 路徑: /nodes/{node}/qemu/{vmid}/config
-            # 方法: set (對應 HTTP PUT)
-            # 去掉 "set " 前綴，保留參數
+            # API 路徑: /nodes/{node}/{qemu|lxc}/{vmid}/config
             ARGS="${ACTION_STRING#set }"
-            
-            # 這裡不加引號 $ARGS 以允許參數展開
-            pvesh set "/nodes/$NODE/qemu/$VMID/config" $ARGS
+            pvesh set "/nodes/$NODE/$TYPE/$VMID/config" $ARGS
             ;;
             
         "start"|"stop"|"reset"|"shutdown"|"suspend"|"resume")
             # 電源管理 (Status)
-            # API 路徑: /nodes/{node}/qemu/{vmid}/status/{command}
-            # 方法: create (對應 HTTP POST)
-            pvesh create "/nodes/$NODE/qemu/$VMID/status/$ACTION_STRING"
+            # CT 不支援 suspend/reset (視具體版本而定，但通常只支援 start/stop/shutdown/reboot)
+            # 不過 API 路徑通常是一致的，如果不支援 API 會回傳錯誤
+            pvesh create "/nodes/$NODE/$TYPE/$VMID/status/$ACTION_STRING"
             ;;
             
+        "reboot")
+            # CT 的重啟通常用 reboot (對應 shutdown + start)
+            # VM 通常也支援，但有時會用 reset
+            pvesh create "/nodes/$NODE/$TYPE/$VMID/status/reboot"
+            ;;
+
         "migrate "*)
             # 遷移 (Migrate)
-            # API 路徑: /nodes/{node}/qemu/{vmid}/migrate
-            # 語法通常是: migrate <target_node>
             TARGET_NODE="${ACTION_STRING#migrate }"
-            pvesh create "/nodes/$NODE/qemu/$VMID/migrate" --target "$TARGET_NODE"
+            pvesh create "/nodes/$NODE/$TYPE/$VMID/migrate" --target "$TARGET_NODE"
             ;;
 
         *)
             echo "Warning: Unrecognized simple action '$ACTION_STRING'. trying raw mapping."
-            echo "Please ensure this maps to a valid API endpoint."
-            # 嘗試作為直接命令 (風險較高，建議擴充 case)
-            pvesh create "/nodes/$NODE/qemu/$VMID/$ACTION_STRING"
+            # 嘗試作為直接命令
+            pvesh create "/nodes/$NODE/$TYPE/$VMID/$ACTION_STRING"
             ;;
     esac
 

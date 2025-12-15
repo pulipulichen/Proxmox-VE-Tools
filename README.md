@@ -6,13 +6,19 @@ Scripts for Proxmox VE deployment
 cluster-ssh-copy.sh
 
 ```bash
-wget https://ppt.cc/fDLnXx -O cluster-ssh-copy.sh
+wget https://ppt.cc/fw6Q8x -O cluster-ssh-copy.sh
 ```
 
 cluster-ssh-exec.sh
 
 ```bash
-wget https://ppt.cc/fgPpmx -O cluster-ssh-exec.sh
+wget https://ppt.cc/fKO9yx -O cluster-ssh-exec.sh
+```
+
+cluster-vm.sh
+
+```bash
+wget https://ppt.cc/fKO9yx -O cluster-vm.sh
 ```
 
 
