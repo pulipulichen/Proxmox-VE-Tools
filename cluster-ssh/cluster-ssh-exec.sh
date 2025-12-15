@@ -2,6 +2,9 @@
 
 # 輸入兩個參數
 
+# 把腳本目前所在目錄的路徑寫到SCRIPT_DIR裡面
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+
 # 第一個參數是指定 host.txt ，內容列出每個主機，每行一個
 
 # 第二個參數是包含要執行指令的檔案路徑。
@@ -33,6 +36,7 @@ fi
 echo "Executing commands from '$COMMANDS_FILE_PATH' on hosts listed in '$HOST_LIST_FILE'..."
 
 while IFS= read -r host; do
+  cd $SCRIPT_DIR
   if [ -n "$host" ]; then # Ensure host is not empty
     echo "  -> Executing on $host..."
     # Use ssh to execute commands from the file on the remote host
