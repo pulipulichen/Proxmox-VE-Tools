@@ -181,11 +181,23 @@
 
         // --- LDAP Command Generator ---
         function generateCommand() {
-            const host = document.getElementById('ldapHost').value.trim() || "ldap_server_ip";
-            const baseDn = document.getElementById('baseDn').value.trim() || "dc=example,dc=com";
-            const bindDn = document.getElementById('bindDn').value.trim();
-            const targetId = document.getElementById('targetId').value.trim() || "username";
+            const hostRaw = document.getElementById('ldapHost').value.trim();
+            const baseDnRaw = document.getElementById('baseDn').value.trim();
+            const bindDnRaw = document.getElementById('bindDn').value.trim();
+            const targetIdRaw = document.getElementById('targetId').value.trim();
             const idAttr = document.getElementById('idAttr').value;
+
+            // Save to localStorage
+            localStorage.setItem('ldap_host', hostRaw);
+            localStorage.setItem('ldap_baseDn', baseDnRaw);
+            localStorage.setItem('ldap_bindDn', bindDnRaw);
+            localStorage.setItem('ldap_targetId', targetIdRaw);
+            localStorage.setItem('ldap_idAttr', idAttr);
+
+            const host = hostRaw || "ldap_server_ip";
+            const baseDn = baseDnRaw || "dc=example,dc=com";
+            const bindDn = bindDnRaw;
+            const targetId = targetIdRaw || "username";
 
             let cmd = `ldapsearch -x`;
             
@@ -211,8 +223,25 @@
             document.getElementById('cmdOutput').value = cmd;
         }
 
+        // Load saved values from localStorage
+        function loadSavedValues() {
+            const host = localStorage.getItem('ldap_host');
+            const baseDn = localStorage.getItem('ldap_baseDn');
+            const bindDn = localStorage.getItem('ldap_bindDn');
+            const targetId = localStorage.getItem('ldap_targetId');
+            const idAttr = localStorage.getItem('ldap_idAttr');
+
+            if (host !== null) document.getElementById('ldapHost').value = host;
+            if (baseDn !== null) document.getElementById('baseDn').value = baseDn;
+            if (bindDn !== null) document.getElementById('bindDn').value = bindDn;
+            if (targetId !== null) document.getElementById('targetId').value = targetId;
+            if (idAttr !== null) document.getElementById('idAttr').value = idAttr;
+
+            generateCommand();
+        }
+
         // Initialize with defaults
-        window.onload = generateCommand;
+        window.onload = loadSavedValues;
 
 
         // --- Base64 Logic ---
