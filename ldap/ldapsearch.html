@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PVE LDAP Search 助手工具</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+    <style>
+        body { font-family: 'Segoe UI', 'Microsoft JhengHei', sans-serif; }
+        .code-block { font-family: 'Consolas', 'Monaco', monospace; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8">
+
+    <div class="max-w-5xl mx-auto space-y-8">
+        
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800"><i class="fas fa-network-wired text-blue-600 mr-2"></i>PVE LDAP Search 助手</h1>
+            <p class="text-gray-600 mt-2">協助 Proxmox VE 管理員快速生成 LDAP 指令與處理屬性編碼</p>
+        </header>
+
+        <!-- Section 1: Installation Guide -->
+        <div class="bg-white rounded-xl shadow-md overflow-hidden border-l-4 border-green-500">
+            <div class="p-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                    <span class="bg-green-100 text-green-600 rounded-full w-8 h-8 flex items-center justify-center mr-3 text-sm">1</span>
+                    安裝 ldapsearch 工具
+                </h2>
+                <p class="text-gray-600 mb-4 text-sm">
+                    Proxmox VE 基於 Debian，請在 PVE Shell 中執行以下指令來安裝 `ldap-utils` 套件。如果無法安裝，請調整 Proxmox VE 的 Repository。做法請參考「<a href="https://ithelp.ithome.com.tw/m/articles/10266968" target="channel">切換更新頻道</a>」。
+                </p>
+                <div class="relative group">
+                    <pre class="bg-gray-800 text-green-400 p-4 rounded-lg code-block overflow-x-auto text-sm">apt update && apt install ldap-utils -y</pre>
+                    <button onclick="copyText('apt update && apt install ldap-utils -y')" class="absolute top-2 right-2 bg-gray-700 hover:bg-gray-600 text-white text-xs px-3 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+                        <i class="fas fa-copy mr-1"></i>複製
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 2: LDAP Search Command Generator -->
+        <div class="bg-white rounded-xl shadow-md overflow-hidden border-l-4 border-blue-500">
+            <div class="p-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-6 flex items-center">
+                    <span class="bg-blue-100 text-blue-600 rounded-full w-8 h-8 flex items-center justify-center mr-3 text-sm">2</span>
+                    搜尋語法產生器
+                </h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <!-- Inputs -->
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">LDAP Server IP / Host</label>
+                            <input type="text" id="ldapHost" placeholder="例如: 192.168.1.10" class="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none" oninput="generateCommand()">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Base DN (搜尋起點)</label>
+                            <input type="text" id="baseDn" placeholder="例如: dc=company,dc=local" class="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none" oninput="generateCommand()">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Bind DN (管理員帳號 - 選填)</label>
+                            <input type="text" id="bindDn" placeholder="例如: cn=admin,dc=company,dc=local" class="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none" oninput="generateCommand()">
+                            <p class="text-xs text-gray-500 mt-1">若匿名搜尋可留空</p>
+                        </div>
+                        <div class="flex space-x-4">
+                            <div class="flex-1">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">目標 User ID</label>
+                                <input type="text" id="targetId" placeholder="例如: john.doe" class="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none" oninput="generateCommand()">
+                            </div>
+                            <div class="w-1/3">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">屬性欄位</label>
+                                <select id="idAttr" class="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white" onchange="generateCommand()">
+                                    <option value="sAMAccountName">sAMAccountName (AD)</option>
+                                    <option value="uid">uid (Linux/OpenLDAP)</option>
+                                    <option value="cn">cn</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Output -->
+                    <div class="flex flex-col">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">產生的指令 (可在 PVE Shell 執行)</label>
+                        <div class="flex-grow relative group h-full">
+                            <textarea id="cmdOutput" readonly class="w-full h-full p-4 bg-gray-800 text-yellow-400 rounded-lg code-block text-sm resize-none focus:outline-none font-mono"></textarea>
+                            <button onclick="copyOutput()" class="absolute top-2 right-2 bg-gray-700 hover:bg-gray-600 text-white text-xs px-3 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+                                <i class="fas fa-copy mr-1"></i>複製
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 3: Base64 Tool -->
+        <div class="bg-white rounded-xl shadow-md overflow-hidden border-l-4 border-purple-500">
+            <div class="p-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
+                    <span class="bg-purple-100 text-purple-600 rounded-full w-8 h-8 flex items-center justify-center mr-3 text-sm">3</span>
+                    MemberOf Base64 編碼/解碼
+                </h2>
+                <p class="text-gray-600 mb-4 text-sm">
+                    當 LDAP 屬性包含中文或特殊字元時，`ldapsearch` 輸出會顯示為 Base64 (格式如 `memberOf:: <亂碼>`)。請將內容貼入下方處理。
+                </p>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Input -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">輸入 (Base64 或 一般文字)</label>
+                        <textarea id="base64Input" placeholder="貼上例如: 5Y+w5YyX5pSv5o+06YOo" class="w-full h-32 p-3 border border-gray-300 rounded focus:ring-2 focus:ring-purple-500 focus:outline-none text-sm font-mono"></textarea>
+                    </div>
+                    
+                    <!-- Output -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">結果</label>
+                        <div class="relative h-32">
+                            <textarea id="base64Output" readonly class="w-full h-full p-3 bg-gray-50 border border-gray-200 rounded text-sm font-mono focus:outline-none"></textarea>
+                            <button onclick="copyBase64Result()" class="absolute top-2 right-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs px-2 py-1 rounded">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="flex space-x-4 mt-4 justify-center md:justify-start">
+                    <button onclick="decodeBase64()" class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg shadow transition flex items-center">
+                        <i class="fas fa-unlock mr-2"></i> 解碼 (Base64 -> 文字)
+                    </button>
+                    <button onclick="encodeBase64()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg shadow transition flex items-center">
+                        <i class="fas fa-lock mr-2"></i> 編碼 (文字 -> Base64)
+                    </button>
+                    <button onclick="clearBase64()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg shadow transition">
+                        清除
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <footer class="text-center text-gray-400 text-xs pb-4">
+            Generated for PVE LDAP Management
+        </footer>
+
+    </div>
+
+    <!-- Scripts -->
+    <script>
+        // --- Copy to Clipboard Helper ---
+        function copyText(text) {
+            const tempInput = document.createElement("textarea");
+            tempInput.value = text;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand("copy");
+            document.body.removeChild(tempInput);
+            
+            // Simple toast notification simulation
+            const btn = event.target.closest('button');
+            const originalContent = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-check mr-1"></i>已複製';
+            btn.classList.remove('bg-gray-700');
+            btn.classList.add('bg-green-600');
+            setTimeout(() => {
+                btn.innerHTML = originalContent;
+                btn.classList.add('bg-gray-700');
+                btn.classList.remove('bg-green-600');
+            }, 1500);
+        }
+
+        function copyOutput() {
+            const text = document.getElementById('cmdOutput').value;
+            if(text) copyText(text);
+        }
+
+        function copyBase64Result() {
+            const text = document.getElementById('base64Output').value;
+            if(text) copyText(text);
+        }
+
+        // --- LDAP Command Generator ---
+        function generateCommand() {
+            const host = document.getElementById('ldapHost').value.trim() || "ldap_server_ip";
+            const baseDn = document.getElementById('baseDn').value.trim() || "dc=example,dc=com";
+            const bindDn = document.getElementById('bindDn').value.trim();
+            const targetId = document.getElementById('targetId').value.trim() || "username";
+            const idAttr = document.getElementById('idAttr').value;
+
+            let cmd = `ldapsearch -x`;
+            
+            // Add Host
+            if (host.includes('://')) {
+                cmd += ` -H ${host}`;
+            } else {
+                cmd += ` -H ldap://${host}`;
+            }
+
+            // Add Bind DN (if exists)
+            if (bindDn) {
+                cmd += ` -D "${bindDn}" -W`; // -W prompts for password
+            }
+
+            // Add Base DN
+            cmd += ` -b "${baseDn}"`;
+
+            // Add Search Filter
+            // For AD, sAMAccountName is standard. For OpenLDAP, uid is standard.
+            cmd += ` "(${idAttr}=${targetId})"`;
+
+            document.getElementById('cmdOutput').value = cmd;
+        }
+
+        // Initialize with defaults
+        window.onload = generateCommand;
+
+
+        // --- Base64 Logic ---
+        
+        // Helper to handle UTF-8 strings properly in Base64
+        function utf8_to_b64(str) {
+            try {
+                return window.btoa(unescape(encodeURIComponent(str)));
+            } catch (e) {
+                return "Error: Encoding failed.";
+            }
+        }
+
+        function b64_to_utf8(str) {
+            try {
+                return decodeURIComponent(escape(window.atob(str)));
+            } catch (e) {
+                return "Error: Invalid Base64 string.";
+            }
+        }
+
+        function decodeBase64() {
+            let input = document.getElementById('base64Input').value.trim();
+            
+            if (!input) return;
+
+            // Common cleanup: remove "memberOf:: " or "description:: " if user copied the whole line from ldapsearch
+            // Regex handles "attribute:: <base64>" pattern
+            input = input.replace(/^[a-zA-Z0-9]+::\s*/, "");
+            
+            // Handle multiple lines if input contains newlines
+            const lines = input.split('\n');
+            const results = lines.map(line => {
+                line = line.trim();
+                // Strip prefix again for each line just in case
+                line = line.replace(/^[a-zA-Z0-9]+::\s*/, "");
+                if(!line) return "";
+                return b64_to_utf8(line);
+            });
+
+            document.getElementById('base64Output').value = results.join('\n');
+        }
+
+        function encodeBase64() {
+            const input = document.getElementById('base64Input').value;
+            if (!input) return;
+
+            // Handle multiple lines
+            const lines = input.split('\n');
+            const results = lines.map(line => {
+                if(!line) return "";
+                return utf8_to_b64(line);
+            });
+
+            document.getElementById('base64Output').value = results.join('\n');
+        }
+
+        function clearBase64() {
+            document.getElementById('base64Input').value = '';
+            document.getElementById('base64Output').value = '';
+        }
+    </script>
+</body>
+</html>

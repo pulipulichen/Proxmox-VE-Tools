@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LDAP User Filter 語法產生器 (AD/PVE)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; }
+        .code-block { font-family: 'Menlo', 'Monaco', 'Courier New', monospace; }
+        /* Custom Scrollbar for Textareas */
+        textarea::-webkit-scrollbar { width: 8px; height: 8px; }
+        textarea::-webkit-scrollbar-track { background: #f1f5f9; }
+        textarea::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        textarea::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen p-4 md:p-8">
+
+    <div class="max-w-6xl mx-auto space-y-8">
+        
+        <!-- Header -->
+        <header class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-blue-600 flex flex-col md:flex-row justify-between items-start md:items-center">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900">LDAP User Filter 語法產生器</h1>
+                <p class="text-slate-500 mt-2">專為多 OU 環境設計，自動從路徑分析網域。</p>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            
+            <!-- Left Column: Inputs (5 Columns) -->
+            <div class="lg:col-span-5 space-y-6">
+                
+                <!-- 1. OU Settings (Textarea) -->
+                <section class="bg-white p-5 rounded-lg shadow-sm border border-slate-100">
+                    <h2 class="font-bold text-lg mb-2 flex items-center text-slate-800">
+                        <span class="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded mr-2">1</span> 
+                        OU 路徑清單
+                    </h2>
+                    <p class="text-xs text-slate-500 mb-3">請貼上 OU 路徑，<strong>一行一筆</strong>。系統將自動從第一行分析網域 (DC)。</p>
+                    
+                    <textarea id="ouTextarea" class="w-full h-40 p-3 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none font-mono leading-relaxed" placeholder="test.local/總部/資訊部&#10;test.local/總部/財務部"></textarea>
+                    
+                    <div class="mt-2 flex flex-col space-y-2">
+                        <div class="flex justify-between items-center text-xs text-slate-500">
+                            <span>格式：網域/OU/子OU</span>
+                            <span id="ouCountBadge" class="bg-slate-100 text-slate-600 px-2 py-1 rounded">0 筆有效路徑</span>
+                        </div>
+                        
+                        <!-- Domain Detection Result -->
+                        <div class="text-xs bg-slate-50 p-2 rounded border border-slate-200">
+                            <div class="flex justify-between">
+                                <span class="font-bold text-slate-600">偵測網域:</span>
+                                <span id="detectedDomainDisplay" class="font-mono text-blue-600">test.local</span>
+                            </div>
+                            <div class="flex justify-between mt-1">
+                                <span class="font-bold text-slate-600">Base DN:</span>
+                                <span id="previewBaseDn" class="font-mono text-slate-500">DC=test,DC=local</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 2. Group Settings -->
+                <section class="bg-white p-5 rounded-lg shadow-sm border border-slate-100">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="font-bold text-lg flex items-center text-slate-800">
+                            <span class="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded mr-2">2</span> 
+                            群組限制 (Optional)
+                        </h2>
+                        <button onclick="addGroupRow()" class="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-3 py-1.5 rounded transition font-medium">+ 新增群組</button>
+                    </div>
+                    <div id="groupContainer" class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                        <!-- Dynamic Rows -->
+                    </div>
+                </section>
+
+                <!-- 3. User Settings -->
+                <section class="bg-white p-5 rounded-lg shadow-sm border border-slate-100">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="font-bold text-lg flex items-center text-slate-800">
+                            <span class="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded mr-2">3</span> 
+                            特定帳號 (Optional)
+                        </h2>
+                        <button onclick="addUserRow()" class="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-3 py-1.5 rounded transition font-medium">+ 新增帳號</button>
+                    </div>
+                    <div id="userContainer" class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                        <!-- Dynamic Rows -->
+                    </div>
+                </section>
+
+            </div>
+
+            <!-- Right Column: Outputs (7 Columns) -->
+            <div class="lg:col-span-7 space-y-6">
+
+                <!-- Output: Filter Result -->
+                <section class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+                    <div class="bg-slate-50 px-6 py-4 border-b border-slate-200">
+                        <h2 class="text-lg font-bold text-slate-800">產出結果：User Filter</h2>
+                    </div>
+                    <div class="p-6 space-y-6">
+                        
+                        <!-- Single Line Copy -->
+                        <div>
+                            <div class="flex justify-between items-end mb-1">
+                                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wide">單行 Filter (請貼入 PVE/LDAP 欄位)</label>
+                                <span class="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">已包含 objectClass 與 OU 限定</span>
+                            </div>
+                            <div class="relative group">
+                                <textarea id="outFilterSingle" readonly class="w-full h-24 p-3 bg-slate-800 text-green-400 border border-slate-700 rounded font-mono text-sm focus:outline-none break-all"></textarea>
+                                <button onclick="copyToClipboard('outFilterSingle')" class="absolute top-2 right-2 text-xs bg-slate-700 text-white border border-slate-600 px-3 py-1.5 rounded hover:bg-slate-600 opacity-0 group-hover:opacity-100 transition shadow-lg">複製</button>
+                            </div>
+                        </div>
+
+                        <!-- Pretty Print -->
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1">排版檢視 (驗證邏輯用)</label>
+                            <pre id="outFilterPretty" class="w-full max-h-[500px] overflow-y-auto p-4 bg-slate-50 border border-slate-200 rounded font-mono text-sm text-slate-700 whitespace-pre-wrap"></pre>
+                        </div>
+                    </div>
+                </section>
+
+            </div>
+        </div>
+        
+        <footer class="text-center text-slate-400 text-sm pb-8 mt-8">
+            <p>&copy; 2025 LDAP Utility. Strategy S2 Enforced. Auto-Domain Detection.</p>
+        </footer>
+
+    </div>
+
+    <script>
+        // --- State Management ---
+        const state = {
+            detectedDomain: 'test.local',
+            ouPaths: [], // Strings from textarea
+            groups: [], // { type: 'dn'|'name', value: '' }
+            users: [],  // { type: 'sAMAccountName'|..., value: '' }
+        };
+
+        // --- DOM Elements ---
+        const el = {
+            previewBaseDn: document.getElementById('previewBaseDn'),
+            detectedDomainDisplay: document.getElementById('detectedDomainDisplay'),
+            ouTextarea: document.getElementById('ouTextarea'),
+            ouCountBadge: document.getElementById('ouCountBadge'),
+            groupContainer: document.getElementById('groupContainer'),
+            userContainer: document.getElementById('userContainer'),
+            
+            outFilterSingle: document.getElementById('outFilterSingle'),
+            outFilterPretty: document.getElementById('outFilterPretty')
+        };
+
+        // --- Initialization ---
+        function init() {
+            // Default value for OU Textarea
+            el.ouTextarea.value = "test.local/總部/資訊部\ntest.local/總部/財務部";
+            
+            renderGroupInputs();
+            renderUserInputs();
+            bindEvents();
+            updateAll();
+        }
+
+        function bindEvents() {
+            el.ouTextarea.addEventListener('input', updateAll);
+        }
+
+        // --- Logic: DN Conversion ---
+        function domainToDn(domain) {
+            if (!domain) return '';
+            return 'DC=' + domain.split('.').join(',DC=');
+        }
+
+        function ouPathToDn(path, domain) {
+            if (!path) return '';
+            let cleanPath = path.trim();
+            if (!cleanPath) return '';
+
+            // Standardize path
+            let parts = cleanPath.split('/').filter(p => p.trim() !== '');
+            
+            // Logic: The first part is the domain.
+            // Check if first part matches our detected domain (case-insensitive)
+            if (parts.length > 0 && parts[0].toLowerCase() === domain.toLowerCase()) {
+                parts.shift();
+            }
+
+            // Reverse: 資訊部 -> 總部
+            let dnParts = parts.reverse().map(p => `OU=${p}`);
+            
+            // Append Domain DN
+            dnParts.push(domainToDn(domain));
+            
+            return dnParts.join(',');
+        }
+
+        // --- UI Rendering: Groups ---
+        function renderGroupInputs() {
+            el.groupContainer.innerHTML = '';
+            if (state.groups.length === 0) {
+                el.groupContainer.innerHTML = '<div class="text-xs text-slate-400 italic p-2 border border-dashed rounded">無群組限制</div>';
+            }
+            state.groups.forEach((grp, index) => {
+                const div = document.createElement('div');
+                div.className = 'flex gap-2 items-center';
+                div.innerHTML = `
+                    <select onchange="updateGroupType(${index}, this.value)" class="p-2 text-xs border rounded bg-slate-50 border-slate-300">
+                        <option value="dn" ${grp.type === 'dn' ? 'selected' : ''}>DN</option>
+                        <option value="name" ${grp.type === 'name' ? 'selected' : ''}>Name</option>
+                    </select>
+                    <input type="text" value="${grp.value}" oninput="updateGroupValue(${index}, this.value)" 
+                        class="flex-1 p-2 text-sm border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 outline-none" 
+                        placeholder="${grp.type === 'dn' ? 'CN=...,OU=...' : 'Group_Name'}">
+                    <button onclick="removeGroup(${index})" class="text-red-400 hover:text-red-600 px-2 font-bold">&times;</button>
+                `;
+                el.groupContainer.appendChild(div);
+            });
+        }
+
+        function addGroupRow() {
+            state.groups.push({ type: 'dn', value: '' });
+            renderGroupInputs();
+            updateAll();
+        }
+
+        function removeGroup(index) {
+            state.groups.splice(index, 1);
+            renderGroupInputs();
+            updateAll();
+        }
+
+        window.updateGroupType = (index, type) => { state.groups[index].type = type; updateAll(); renderGroupInputs(); };
+        window.updateGroupValue = (index, val) => { state.groups[index].value = val; updateAll(); };
+
+        // --- UI Rendering: Users ---
+        function renderUserInputs() {
+            el.userContainer.innerHTML = '';
+            if (state.users.length === 0) {
+                el.userContainer.innerHTML = '<div class="text-xs text-slate-400 italic p-2 border border-dashed rounded">無特定帳號限制</div>';
+            }
+            state.users.forEach((usr, index) => {
+                const div = document.createElement('div');
+                div.className = 'flex gap-2 items-center';
+                div.innerHTML = `
+                    <select onchange="updateUserType(${index}, this.value)" class="p-2 text-xs border rounded bg-slate-50 border-slate-300 w-28">
+                        <option value="sAMAccountName" ${usr.type === 'sAMAccountName' ? 'selected' : ''}>sAMAcc..</option>
+                        <option value="userPrincipalName" ${usr.type === 'userPrincipalName' ? 'selected' : ''}>UPN</option>
+                        <option value="uid" ${usr.type === 'uid' ? 'selected' : ''}>uid</option>
+                        <option value="employeeID" ${usr.type === 'employeeID' ? 'selected' : ''}>EmpID</option>
+                    </select>
+                    <input type="text" value="${usr.value}" oninput="updateUserValue(${index}, this.value)" 
+                        class="flex-1 p-2 text-sm border border-slate-300 rounded focus:ring-1 focus:ring-blue-500 outline-none" placeholder="value">
+                    <button onclick="removeUser(${index})" class="text-red-400 hover:text-red-600 px-2 font-bold">&times;</button>
+                `;
+                el.userContainer.appendChild(div);
+            });
+        }
+
+        function addUserRow() {
+            state.users.push({ type: 'sAMAccountName', value: '' });
+            renderUserInputs();
+            updateAll();
+        }
+
+        function removeUser(index) {
+            state.users.splice(index, 1);
+            renderUserInputs();
+            updateAll();
+        }
+
+        window.updateUserType = (index, type) => { state.users[index].type = type; updateAll(); };
+        window.updateUserValue = (index, val) => { state.users[index].value = val; updateAll(); };
+
+        // --- Logic: Domain Detection & Filter ---
+        function updateAll() {
+            const rawText = el.ouTextarea.value;
+            state.ouPaths = rawText.split('\n').map(line => line.trim()).filter(line => line !== '');
+            el.ouCountBadge.textContent = `${state.ouPaths.length} 筆有效路徑`;
+            
+            // 1. Detect Domain from first valid path
+            let detectedDomain = 'example.com'; // Fallback
+            if (state.ouPaths.length > 0) {
+                // Take first line: "test.local/OU1/OU2" -> split -> "test.local"
+                const firstPath = state.ouPaths[0];
+                const parts = firstPath.split('/');
+                if (parts.length > 0 && parts[0].includes('.')) {
+                    detectedDomain = parts[0];
+                }
+            }
+            state.detectedDomain = detectedDomain;
+            el.detectedDomainDisplay.textContent = detectedDomain;
+
+            // 2. Calculate Base DN
+            const rootDn = domainToDn(detectedDomain);
+            el.previewBaseDn.textContent = rootDn;
+
+            // 3. Resolve OUs to DNs
+            const ouDns = state.ouPaths
+                .map(p => ({ path: p, dn: ouPathToDn(p, detectedDomain) }));
+
+            // 4. Build Filter Parts
+            const conditions = [];
+
+            // A. Groups
+            state.groups.filter(g => g.value.trim()).forEach(g => {
+                if (g.type === 'dn') {
+                    conditions.push(`(memberOf=${g.value.trim()})`);
+                } else {
+                    conditions.push(`(memberOf=CN=${g.value.trim()},...)`); 
+                }
+            });
+
+            // B. Users
+            state.users.filter(u => u.value.trim()).forEach(u => {
+                conditions.push(`(${u.type}=${u.value.trim()})`);
+            });
+
+            // C. Strategy S2: OU Limitation inside Filter
+            if (ouDns.length > 0) {
+                ouDns.forEach(o => {
+                    conditions.push(`(distinguishedName=*,${o.dn})`);
+                });
+            }
+
+            // 5. Assemble Filter
+            const objectReq = `(objectCategory=person)(objectClass=user)`;
+            let finalFilter = '';
+            
+            if (conditions.length === 0) {
+                finalFilter = `(&${objectReq})`;
+            } else {
+                const orBlock = `(|${conditions.join('')})`;
+                finalFilter = `(&${objectReq}${orBlock})`;
+            }
+
+            // 6. Outputs
+            el.outFilterSingle.value = finalFilter;
+            el.outFilterPretty.textContent = formatLdapFilter(finalFilter);
+        }
+
+        function formatLdapFilter(filter) {
+            let indent = 0;
+            let output = '';
+            for (let i = 0; i < filter.length; i++) {
+                const char = filter[i];
+                if (char === '(') {
+                    output += '\n' + '  '.repeat(indent) + char;
+                    indent++;
+                } else if (char === ')') {
+                    indent--;
+                    output += char;
+                } else {
+                    output += char;
+                }
+            }
+            return output.trim();
+        }
+
+        // --- Helpers ---
+        window.addGroupRow = addGroupRow;
+        window.removeGroup = removeGroup;
+        window.addUserRow = addUserRow;
+        window.removeUser = removeUser;
+
+        window.copyToClipboard = (id) => {
+            const el = document.getElementById(id);
+            el.select();
+            document.execCommand('copy');
+        };
+
+        // Start
+        init();
+
+    </script>
+</body>
+</html>
