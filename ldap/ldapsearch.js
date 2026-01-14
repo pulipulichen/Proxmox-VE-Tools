@@ -30,6 +30,11 @@ function copyBase64Result() {
     if(text) copyText(text);
 }
 
+function copyDnPath() {
+    const text = document.getElementById('dnPathOutput').value;
+    if(text) copyText(text);
+}
+
 // --- LDAP Command Generator ---
 function generateCommand() {
     const hostRaw = document.getElementById('ldapHost').value.trim();
@@ -117,7 +122,10 @@ function b64_to_utf8(str) {
 function decodeBase64() {
     let input = document.getElementById('base64Input').value.trim();
     
-    if (!input) return;
+    if (!input) {
+        clearBase64();
+        return;
+    }
 
     // Common cleanup: remove "memberOf:: " or "description:: " if user copied the whole line from ldapsearch
     // Regex handles "attribute:: <base64>" pattern
@@ -133,24 +141,65 @@ function decodeBase64() {
         return b64_to_utf8(line);
     });
 
-    document.getElementById('base64Output').value = results.join('\n');
+    const decodedText = results.join('\n');
+    document.getElementById('base64Output').value = decodedText;
+
+    // DN to Path conversion
+    const paths = results.map(line => {
+        if (!line || !line.includes('=')) return "";
+        return convertDNToPath(line);
+    }).filter(p => p !== "");
+    
+    document.getElementById('dnPathOutput').value = paths.join('\n');
 }
 
-function encodeBase64() {
-    const input = document.getElementById('base64Input').value;
-    if (!input) return;
-
-    // Handle multiple lines
-    const lines = input.split('\n');
-    const results = lines.map(line => {
-        if(!line) return "";
-        return utf8_to_b64(line);
-    });
-
-    document.getElementById('base64Output').value = results.join('\n');
+/**
+ * Converts LDAP DN to a readable path
+ * Example: CN=Users,OU=IT,OU=Head,DC=test,DC=local -> test.local/Head/IT
+ */
+function convertDNToPath(dn) {
+    try {
+        // Simple parser for DN parts, handling basic escaping
+        // Note: This is a simplified parser
+        const parts = dn.split(',').map(p => p.trim());
+        const dc = [];
+        const ou = [];
+        
+        parts.forEach(part => {
+            const eqIndex = part.indexOf('=');
+            if (eqIndex === -1) return;
+            
+            const key = part.substring(0, eqIndex).toUpperCase();
+            const value = part.substring(eqIndex + 1);
+            
+            if (key === 'DC') {
+                dc.push(value);
+            } else if (key === 'OU') {
+                ou.unshift(value); // OUs are hierarchical in reverse order in DN
+            }
+        });
+        
+        const domain = dc.join('.');
+        const path = ou.join('/');
+        
+        if (!domain && !path) return "";
+        return domain + (path ? '/' + path : '');
+    } catch (e) {
+        return "";
+    }
 }
 
 function clearBase64() {
     document.getElementById('base64Input').value = '';
     document.getElementById('base64Output').value = '';
+    document.getElementById('dnPathOutput').value = '';
+}
+
+// --- Auto Decode with Debounce ---
+let autoDecodeTimer;
+function autoDecodeBase64() {
+    clearTimeout(autoDecodeTimer);
+    autoDecodeTimer = setTimeout(() => {
+        decodeBase64();
+    }, 500); // 500ms delay
 }

@@ -57,9 +57,8 @@
                             <input type="text" id="baseDn" placeholder="例如: dc=company,dc=local" class="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none" oninput="generateCommand()">
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Bind DN (管理員帳號 - 選填)</label>
-                            <input type="text" id="bindDn" placeholder="例如: cn=admin,dc=company,dc=local" class="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none" oninput="generateCommand()">
-                            <p class="text-xs text-gray-500 mt-1">若匿名搜尋可留空</p>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Bind DN (管理員帳號 - 必填)</label>
+                            <input type="text" id="bindDn" placeholder="例如: cn=admin,dc=company,dc=local，或 administrator@company.local" class="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none" oninput="generateCommand()" required>
                         </div>
                         <div class="flex space-x-4">
                             <div class="flex-1">
@@ -96,22 +95,22 @@
             <div class="p-6">
                 <h2 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
                     <span class="bg-purple-100 text-purple-600 rounded-full w-8 h-8 flex items-center justify-center mr-3 text-sm">3</span>
-                    MemberOf Base64 編碼/解碼
+                    MemberOf Base64 解碼
                 </h2>
                 <p class="text-gray-600 mb-4 text-sm">
-                    當 LDAP 屬性包含中文或特殊字元時，`ldapsearch` 輸出會顯示為 Base64 (格式如 `memberOf:: <亂碼>`)。請將內容貼入下方處理。
+                    當 LDAP 屬性包含中文或特殊字元時，`ldapsearch` 輸出會顯示為 Base64 (格式如 `memberOf:: <亂碼>`)。請將內容貼入左側，系統將自動解碼。
                 </p>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <!-- Input -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">輸入 (Base64 或 一般文字)</label>
-                        <textarea id="base64Input" placeholder="貼上例如: 5Y+w5YyX5pSv5o+06YOo" class="w-full h-32 p-3 border border-gray-300 rounded focus:ring-2 focus:ring-purple-500 focus:outline-none text-sm font-mono"></textarea>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">輸入 (Base64)</label>
+                        <textarea id="base64Input" placeholder="貼上例如: 5Y+w5YyX5pSv5o+06YOo" class="w-full h-32 p-3 border border-gray-300 rounded focus:ring-2 focus:ring-purple-500 focus:outline-none text-sm font-mono" oninput="autoDecodeBase64()"></textarea>
                     </div>
                     
                     <!-- Output -->
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">結果</label>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">解碼結果</label>
                         <div class="relative h-32">
                             <textarea id="base64Output" readonly class="w-full h-full p-3 bg-gray-50 border border-gray-200 rounded text-sm font-mono focus:outline-none"></textarea>
                             <button onclick="copyBase64Result()" class="absolute top-2 right-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs px-2 py-1 rounded">
@@ -121,13 +120,21 @@
                     </div>
                 </div>
 
+                <!-- DN Path Output -->
+                <div class="mt-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">DN 路徑 (格式化)</label>
+                    <div class="relative h-24">
+                        <textarea id="dnPathOutput" readonly class="w-full h-full p-3 bg-blue-50 border border-blue-100 rounded text-sm font-mono focus:outline-none text-blue-800" placeholder="例如: test.local/總部/資訊部"></textarea>
+                        <button onclick="copyDnPath()" class="absolute top-2 right-2 bg-blue-100 hover:bg-blue-200 text-blue-700 text-xs px-2 py-1 rounded">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                    </div>
+                </div>
+
                 <!-- Controls -->
                 <div class="flex space-x-4 mt-4 justify-center md:justify-start">
                     <button onclick="decodeBase64()" class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2 rounded-lg shadow transition flex items-center">
-                        <i class="fas fa-unlock mr-2"></i> 解碼 (Base64 -> 文字)
-                    </button>
-                    <button onclick="encodeBase64()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg shadow transition flex items-center">
-                        <i class="fas fa-lock mr-2"></i> 編碼 (文字 -> Base64)
+                        <i class="fas fa-unlock mr-2"></i> 手動解碼
                     </button>
                     <button onclick="clearBase64()" class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg shadow transition">
                         清除
