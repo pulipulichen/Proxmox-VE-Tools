@@ -3,19 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LDAP User Filter 語法產生器 (AD/PVE)</title>
+    <title>LDAP Group Filter 語法產生器</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Custom scrollbar for better look in textareas */
+        textarea::-webkit-scrollbar { width: 8px; }
+        textarea::-webkit-scrollbar-track { background: #f1f5f9; }
+        textarea::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        textarea::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
 </head>
 <body class="bg-slate-50 text-slate-800 min-h-screen p-4 md:p-8">
 
     <div class="max-w-6xl mx-auto space-y-8">
         
         <!-- Header -->
-        <header class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-blue-600 flex flex-col md:flex-row justify-between items-start md:items-center">
+        <header class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-indigo-600 flex flex-col md:flex-row justify-between items-start md:items-center">
             <div>
-                <h1 class="text-2xl font-bold text-slate-900">LDAP User Filter 語法產生器</h1>
-                <p class="text-slate-500 mt-2">專為多 OU 環境設計，自動從路徑分析網域。</p>
+                <h1 class="text-2xl font-bold text-slate-900">LDAP User Filter 產生器 (Group Based)</h1>
+                <p class="text-slate-500 mt-2">
+                    將路徑清單轉換為群組成員檢查 (memberOf)。最後一節視為群組名稱。
+                    <a href="windows-ad.png" target="windows_ad">Windows AD的設定示意圖</a>
+                </p>
+                                
             </div>
         </header>
 
@@ -24,27 +34,27 @@
             <!-- Left Column: Inputs (5 Columns) -->
             <div class="lg:col-span-5 space-y-6">
                 
-                <!-- 1. OU Settings (Textarea) -->
+                <!-- 1. Path Settings (Textarea) -->
                 <section class="bg-white p-5 rounded-lg shadow-sm border border-slate-100">
                     <h2 class="font-bold text-lg mb-2 flex items-center text-slate-800">
-                        <span class="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded mr-2">1</span> 
-                        OU 路徑清單
+                        <span class="bg-indigo-100 text-indigo-800 text-xs font-bold px-2 py-1 rounded mr-2">1</span> 
+                        群組路徑清單
                     </h2>
-                    <p class="text-xs text-slate-500 mb-3">請貼上 OU 路徑，<strong>一行一筆</strong>。系統將自動從第一行分析網域 (DC)。</p>
+                    <p class="text-xs text-slate-500 mb-3">請貼上完整路徑，系統將視<strong>最後一節為群組(CN)</strong>，中間為 OU。</p>
                     
-                    <textarea id="ouTextarea" class="w-full h-40 p-3 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none font-mono leading-relaxed" placeholder="test.local/總部/資訊部&#10;test.local/總部/財務部"></textarea>
+                    <textarea id="ouTextarea" class="w-full h-40 p-3 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none font-mono leading-relaxed" placeholder="test.local/總部/資訊部&#10;test.local/總部/財務部"></textarea>
                     
                     <div class="mt-2 flex flex-col space-y-2">
                         <div class="flex justify-between items-center text-xs text-slate-500">
-                            <span>格式：網域/OU/子OU</span>
-                            <span id="ouCountBadge" class="bg-slate-100 text-slate-600 px-2 py-1 rounded">0 筆有效路徑</span>
+                            <span>格式：網域/OU/群組名稱</span>
+                            <span id="ouCountBadge" class="bg-slate-100 text-slate-600 px-2 py-1 rounded">0 筆</span>
                         </div>
                         
                         <!-- Domain Detection Result -->
                         <div class="text-xs bg-slate-50 p-2 rounded border border-slate-200">
                             <div class="flex justify-between">
                                 <span class="font-bold text-slate-600">偵測網域:</span>
-                                <span id="detectedDomainDisplay" class="font-mono text-blue-600">test.local</span>
+                                <span id="detectedDomainDisplay" class="font-mono text-indigo-600">test.local</span>
                             </div>
                             <div class="flex justify-between mt-1">
                                 <span class="font-bold text-slate-600">Base DN:</span>
@@ -54,28 +64,28 @@
                     </div>
                 </section>
 
-                <!-- 2. Group Settings -->
+                <!-- 2. Additional Groups -->
                 <section class="bg-white p-5 rounded-lg shadow-sm border border-slate-100">
                     <div class="flex justify-between items-center mb-4">
                         <h2 class="font-bold text-lg flex items-center text-slate-800">
-                            <span class="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded mr-2">2</span> 
-                            群組限制 (Optional)
+                            <span class="bg-indigo-100 text-indigo-800 text-xs font-bold px-2 py-1 rounded mr-2">2</span> 
+                            額外群組 (Optional)
                         </h2>
-                        <button onclick="addGroupRow()" class="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-3 py-1.5 rounded transition font-medium">+ 新增群組</button>
+                        <button onclick="addGroupRow()" class="text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-3 py-1.5 rounded transition font-medium">+ 新增</button>
                     </div>
                     <div id="groupContainer" class="space-y-2 max-h-48 overflow-y-auto pr-1">
                         <!-- Dynamic Rows -->
                     </div>
                 </section>
 
-                <!-- 3. User Settings -->
+                <!-- 3. Specific Users -->
                 <section class="bg-white p-5 rounded-lg shadow-sm border border-slate-100">
                     <div class="flex justify-between items-center mb-4">
                         <h2 class="font-bold text-lg flex items-center text-slate-800">
-                            <span class="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded mr-2">3</span> 
+                            <span class="bg-indigo-100 text-indigo-800 text-xs font-bold px-2 py-1 rounded mr-2">3</span> 
                             特定帳號 (Optional)
                         </h2>
-                        <button onclick="addUserRow()" class="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-3 py-1.5 rounded transition font-medium">+ 新增帳號</button>
+                        <button onclick="addUserRow()" class="text-xs bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-3 py-1.5 rounded transition font-medium">+ 新增</button>
                     </div>
                     <div id="userContainer" class="space-y-2 max-h-48 overflow-y-auto pr-1">
                         <!-- Dynamic Rows -->
@@ -89,8 +99,9 @@
 
                 <!-- Output: Filter Result -->
                 <section class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-                    <div class="bg-slate-50 px-6 py-4 border-b border-slate-200">
+                    <div class="bg-slate-50 px-6 py-4 border-b border-slate-200 flex justify-between items-center">
                         <h2 class="text-lg font-bold text-slate-800">產出結果：User Filter</h2>
+                        <span class="text-xs font-mono text-slate-400">Logic: (&(User)(|(GroupA)(GroupB)...))</span>
                     </div>
                     <div class="p-6 space-y-6">
                         
@@ -98,10 +109,10 @@
                         <div>
                             <div class="flex justify-between items-end mb-1">
                                 <label class="block text-xs font-bold text-slate-500 uppercase tracking-wide">單行 Filter (請貼入 PVE/LDAP 欄位)</label>
-                                <span class="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-100">已包含 objectClass 與 OU 限定</span>
+                                <span class="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">已包含 memberOf 邏輯</span>
                             </div>
                             <div class="relative group">
-                                <textarea id="outFilterSingle" readonly class="w-full h-24 p-3 bg-slate-800 text-green-400 border border-slate-700 rounded font-mono text-sm focus:outline-none break-all"></textarea>
+                                <textarea id="outFilterSingle" readonly class="w-full h-24 p-3 bg-slate-800 text-emerald-400 border border-slate-700 rounded font-mono text-sm focus:outline-none break-all"></textarea>
                                 <button onclick="copyToClipboard('outFilterSingle')" class="absolute top-2 right-2 text-xs bg-slate-700 text-white border border-slate-600 px-3 py-1.5 rounded hover:bg-slate-600 opacity-0 group-hover:opacity-100 transition shadow-lg">複製</button>
                             </div>
                         </div>
@@ -118,13 +129,12 @@
         </div>
         
         <footer class="text-center text-slate-400 text-sm pb-8 mt-8">
-            <p>&copy; 2025 LDAP Utility. Strategy S2 Enforced. Auto-Domain Detection.</p>
+            <p>&copy; 2025 LDAP Utility. Group Membership Strategy.</p>
         </footer>
 
     </div>
 
     <script src="script.js"></script>
->>>>>>> +++++++ REPLACE
 
 </body>
 </html>
