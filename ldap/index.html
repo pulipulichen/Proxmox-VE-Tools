@@ -21,6 +21,14 @@
             <p class="text-slate-500 mt-2">
                 將路徑清單轉換為 User Filter (登入權限) 與 Group Filter (群組同步)。
             </p>
+            <ul class="list-disc ml-6 mt-2 text-sm text-slate-500 space-y-1">
+                <li>
+                    請注意 Windows AD 裡 DC、OU 跟 CN 的設定，成員必須在 CN 中：<a href="windows-ad.png" target="ad" class="text-indigo-600 hover:underline">參考圖</a>。
+                </li>
+                <li>
+                    如果不確定群組路徑清單，請使用 ldapsearch 指令搜尋：<a href="ldapsearch.html" class="text-indigo-600 hover:underline">ldapsearch 指令產生機</a>。
+                </li>
+            </ul>
         </header>
 
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -115,7 +123,7 @@
         </div>
         
         <footer class="text-center text-slate-400 text-sm pb-8 mt-8">
-            <p>&copy; 2025 LDAP Utility. PVE Group Strategy.</p>
+            <a href="https://blog.pulipuli.info/">&copy; 2026 布丁布丁吃什麼？</a>
         </footer>
 
     </div>
