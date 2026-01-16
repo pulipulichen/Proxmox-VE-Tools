@@ -7,8 +7,6 @@ const state = {
 
 // --- DOM Elements ---
 const el = {
-    previewBaseDn: document.getElementById('previewBaseDn'),
-    detectedDomainDisplay: document.getElementById('detectedDomainDisplay'),
     ouTextarea: document.getElementById('ouTextarea'),
     ouCountBadge: document.getElementById('ouCountBadge'),
     userContainer: document.getElementById('userContainer'),
@@ -169,8 +167,6 @@ function updateAll() {
         }
     }
     state.detectedDomain = detectedDomain;
-    el.detectedDomainDisplay.textContent = detectedDomain;
-    el.previewBaseDn.textContent = domainToDn(detectedDomain);
 
     // 2. Build Conditions
     const userMemberOfConditions = []; // For User Filter
