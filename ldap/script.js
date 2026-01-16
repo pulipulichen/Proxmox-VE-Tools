@@ -2,8 +2,7 @@
 const state = {
     detectedDomain: 'test.local',
     ouPaths: [], // Strings from textarea
-    groups: [], // Additional groups from Section 2
-    users: [],  // Specific users from Section 3
+    users: [],  // Specific users from Section 2
 };
 
 // --- DOM Elements ---
@@ -12,20 +11,19 @@ const el = {
     detectedDomainDisplay: document.getElementById('detectedDomainDisplay'),
     ouTextarea: document.getElementById('ouTextarea'),
     ouCountBadge: document.getElementById('ouCountBadge'),
-    groupContainer: document.getElementById('groupContainer'),
     userContainer: document.getElementById('userContainer'),
 
     outFilterSingle: document.getElementById('outFilterSingle'),
+    outGroupFilter: document.getElementById('outGroupFilter'), // NEW
     outFilterPretty: document.getElementById('outFilterPretty')
 };
 
 // --- Persistence ---
-const STORAGE_KEY = 'ldap_group_filter_state_v2';
+const STORAGE_KEY = 'ldap_pve_filter_state_v3'; // Changed key version
 
 function saveToLocalStorage() {
     const dataToSave = {
         ouTextarea: el.ouTextarea.value,
-        groups: state.groups,
         users: state.users
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
@@ -38,9 +36,6 @@ function loadFromLocalStorage() {
             const parsed = JSON.parse(savedData);
             if (parsed.ouTextarea !== undefined) {
                 el.ouTextarea.value = parsed.ouTextarea;
-            }
-            if (parsed.groups) {
-                state.groups = parsed.groups;
             }
             if (parsed.users) {
                 state.users = parsed.users;
@@ -62,7 +57,6 @@ function init() {
         el.ouTextarea.value = "test.local/總部/資訊部\ntest.local/總部/財務部";
     }
 
-    renderGroupInputs();
     renderUserInputs();
     bindEvents();
     updateAll();
@@ -112,56 +106,7 @@ function pathToDn(path, domain) {
     return dnComponents.join(',');
 }
 
-// --- UI Rendering: Groups (Section 2) ---
-function renderGroupInputs() {
-    el.groupContainer.innerHTML = '';
-    if (state.groups.length === 0) {
-        el.groupContainer.innerHTML = '<div class="text-xs text-slate-400 italic p-2 border border-dashed rounded">無額外群組</div>';
-    }
-    state.groups.forEach((grp, index) => {
-        const div = document.createElement('div');
-        div.className = 'flex gap-2 items-center';
-        div.innerHTML = `
-            <select onchange="updateGroupType(${index}, this.value)" class="p-2 text-xs border rounded bg-slate-50 border-slate-300">
-                <option value="dn" ${grp.type === 'dn' ? 'selected' : ''}>DN</option>
-                <option value="name" ${grp.type === 'name' ? 'selected' : ''}>Name</option>
-            </select>
-            <input type="text" value="${grp.value}" oninput="updateGroupValue(${index}, this.value)" 
-                class="flex-1 p-2 text-sm border border-slate-300 rounded focus:ring-1 focus:ring-indigo-500 outline-none" 
-                placeholder="${grp.type === 'dn' ? 'CN=...,OU=...' : 'Group_Name'}">
-            <button onclick="removeGroup(${index})" class="text-red-400 hover:text-red-600 px-2 font-bold">&times;</button>
-        `;
-        el.groupContainer.appendChild(div);
-    });
-}
-
-function addGroupRow() {
-    state.groups.push({ type: 'dn', value: '' });
-    renderGroupInputs();
-    updateAll();
-    saveToLocalStorage();
-}
-
-function removeGroup(index) {
-    state.groups.splice(index, 1);
-    renderGroupInputs();
-    updateAll();
-    saveToLocalStorage();
-}
-
-window.updateGroupType = (index, type) => { 
-    state.groups[index].type = type; 
-    updateAll(); 
-    renderGroupInputs(); 
-    saveToLocalStorage();
-};
-window.updateGroupValue = (index, val) => { 
-    state.groups[index].value = val; 
-    updateAll(); 
-    saveToLocalStorage();
-};
-
-// --- UI Rendering: Users (Section 3) ---
+// --- UI Rendering: Users (Section 2) ---
 function renderUserInputs() {
     el.userContainer.innerHTML = '';
     if (state.users.length === 0) {
@@ -227,50 +172,59 @@ function updateAll() {
     el.detectedDomainDisplay.textContent = detectedDomain;
     el.previewBaseDn.textContent = domainToDn(detectedDomain);
 
-    // 2. Build Filter Conditions
-    const conditions = [];
+    // 2. Build Conditions
+    const userMemberOfConditions = []; // For User Filter
+    const groupDnConditions = [];      // For Group Filter (PVE Sync)
 
-    // A. Groups from Path List (Section 1)
+    // Process Paths
     state.ouPaths.forEach(path => {
         const fullDn = pathToDn(path, detectedDomain);
         if (fullDn) {
-            conditions.push(`(memberOf=${fullDn})`);
+            // User Filter needs: (memberOf=CN=...,OU=...)
+            userMemberOfConditions.push(`(memberOf=${fullDn})`);
+            
+            // Group Filter needs: (distinguishedName=CN=...,OU=...)
+            // This ensures we only sync the specific groups mentioned in the path
+            groupDnConditions.push(`(distinguishedName=${fullDn})`);
         }
     });
 
-    // B. Additional Groups (Section 2)
-    state.groups.filter(g => g.value.trim()).forEach(g => {
-        if (g.type === 'dn') {
-            conditions.push(`(memberOf=${g.value.trim()})`);
-        } else {
-            // Fuzzy name match - usually risky in LDAP filters without DN, but provided as option
-            // Often better to use CN={name}*, but here we assume user knows what they do or puts full CN
-            conditions.push(`(memberOf=CN=${g.value.trim()},*)`); 
-        }
-    });
-
-    // C. Specific Users (Section 3)
+    // Specific Users (Only affects User Filter)
     state.users.filter(u => u.value.trim()).forEach(u => {
-        conditions.push(`(${u.type}=${u.value.trim()})`);
+        userMemberOfConditions.push(`(${u.type}=${u.value.trim()})`);
     });
 
-    // 3. Assemble Filter
-    // Standard AD User object category
-    const objectReq = `(objectCategory=person)(objectClass=user)`;
-    let finalFilter = '';
+    // 3. Assemble USER Filter (Login Permissions)
+    const userObjectReq = `(objectCategory=person)(objectClass=user)`;
+    let finalUserFilter = '';
 
-    if (conditions.length === 0) {
-        // If nothing specified, just return all users (safest default for "generator", though risky for "firewall")
-        finalFilter = `(&${objectReq})`;
+    if (userMemberOfConditions.length === 0) {
+        finalUserFilter = `(&${userObjectReq})`;
     } else {
-        // OR logic for all allowed groups/users
-        const orBlock = `(|${conditions.join('')})`;
-        finalFilter = `(&${objectReq}${orBlock})`;
+        const orBlock = `(|${userMemberOfConditions.join('')})`;
+        finalUserFilter = `(&${userObjectReq}${orBlock})`;
     }
 
-    // 4. Outputs
-    el.outFilterSingle.value = finalFilter;
-    el.outFilterPretty.textContent = formatLdapFilter(finalFilter);
+    // 4. Assemble GROUP Filter (PVE Sync)
+    // Needs (objectClass=group) AND ( DN=A OR DN=B ... )
+    const groupObjectReq = `(objectClass=group)`;
+    let finalGroupFilter = '';
+    
+    if (groupDnConditions.length === 0) {
+        // If no groups defined, don't sync any groups (safer) or sync all (risky)
+        // Here we default to (objectClass=group) which syncs ALL groups if list is empty, 
+        // BUT usually it's better to return a "match nothing" if intent is empty.
+        // Let's stick to base requirement.
+        finalGroupFilter = `(${groupObjectReq})`; 
+    } else {
+        const groupOrBlock = `(|${groupDnConditions.join('')})`;
+        finalGroupFilter = `(&${groupObjectReq}${groupOrBlock})`;
+    }
+
+    // 5. Outputs
+    el.outFilterSingle.value = finalUserFilter;
+    el.outGroupFilter.value = finalGroupFilter; // NEW Output
+    el.outFilterPretty.textContent = formatLdapFilter(finalUserFilter);
 }
 
 function formatLdapFilter(filter) {
@@ -292,8 +246,6 @@ function formatLdapFilter(filter) {
 }
 
 // --- Helpers ---
-window.addGroupRow = addGroupRow;
-window.removeGroup = removeGroup;
 window.addUserRow = addUserRow;
 window.removeUser = removeUser;
 
