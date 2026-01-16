@@ -13,7 +13,9 @@ const el = {
 
     outFilterSingle: document.getElementById('outFilterSingle'),
     outGroupFilter: document.getElementById('outGroupFilter'), // NEW
-    outFilterPretty: document.getElementById('outFilterPretty')
+    outFilterPretty: document.getElementById('outFilterPretty'),
+    groupFilterWarning: document.getElementById('groupFilterWarning'),
+    excludedCnList: document.getElementById('excludedCnList')
 };
 
 // --- Persistence ---
@@ -78,9 +80,10 @@ function domainToDn(domain) {
  * Logic: Last segment is CN, middle segments are OUs.
  */
 function pathToDn(path, domain) {
-    if (!path) return '';
+    const result = { dn: '', cn: '' };
+    if (!path) return result;
     let cleanPath = path.trim();
-    if (!cleanPath) return '';
+    if (!cleanPath) return result;
 
     // Standardize path
     let parts = cleanPath.split('/').filter(p => p.trim() !== '');
@@ -90,10 +93,11 @@ function pathToDn(path, domain) {
         parts.shift();
     }
 
-    if (parts.length === 0) return '';
+    if (parts.length === 0) return result;
 
     // The LAST part is the Group Name (CN)
     const groupName = parts.pop(); 
+    result.cn = groupName;
     
     // The remaining parts are OUs, reversed (Bottom-up)
     let ouParts = parts.reverse().map(p => `OU=${p}`);
@@ -101,7 +105,8 @@ function pathToDn(path, domain) {
     // Construct DN: CN=Group,OU=...,DC=...
     const dnComponents = [`CN=${groupName}`, ...ouParts, domainToDn(domain)];
     
-    return dnComponents.join(',');
+    result.dn = dnComponents.join(',');
+    return result;
 }
 
 // --- UI Rendering: Users (Section 2) ---
@@ -171,19 +176,34 @@ function updateAll() {
     // 2. Build Conditions
     const userMemberOfConditions = []; // For User Filter
     const groupDnConditions = [];      // For Group Filter (PVE Sync)
+    const excludedCns = [];
 
     // Process Paths
     state.ouPaths.forEach(path => {
-        const fullDn = pathToDn(path, detectedDomain);
+        const { dn: fullDn, cn } = pathToDn(path, detectedDomain);
         if (fullDn) {
             // User Filter needs: (memberOf=CN=...,OU=...)
             userMemberOfConditions.push(`(memberOf=${fullDn})`);
             
-            // Group Filter needs: (distinguishedName=CN=...,OU=...)
-            // This ensures we only sync the specific groups mentioned in the path
-            groupDnConditions.push(`(distinguishedName=${fullDn})`);
+            // CN validation: alphanumeric, underscore, dash, dot
+            const cnRegex = /^[a-zA-Z0-9._-]+$/;
+            if (cnRegex.test(cn)) {
+                // Group Filter needs: (distinguishedName=CN=...,OU=...)
+                // This ensures we only sync the specific groups mentioned in the path
+                groupDnConditions.push(`(distinguishedName=${fullDn})`);
+            } else {
+                excludedCns.push(cn);
+            }
         }
     });
+
+    // Update Warnings
+    if (excludedCns.length > 0) {
+        el.groupFilterWarning.classList.remove('hidden');
+        el.excludedCnList.innerHTML = excludedCns.map(cn => `<li>${cn}</li>`).join('');
+    } else {
+        el.groupFilterWarning.classList.add('hidden');
+    }
 
     // Specific Users (Only affects User Filter)
     state.users.filter(u => u.value.trim()).forEach(u => {
@@ -211,7 +231,8 @@ function updateAll() {
         // Here we default to (objectClass=group) which syncs ALL groups if list is empty, 
         // BUT usually it's better to return a "match nothing" if intent is empty.
         // Let's stick to base requirement.
-        finalGroupFilter = `(${groupObjectReq})`; 
+        // finalGroupFilter = `(${groupObjectReq})`; 
+        finalGroupFilter = `(不建議加入Group)`; 
     } else {
         const groupOrBlock = `(|${groupDnConditions.join('')})`;
         finalGroupFilter = `(&${groupObjectReq}${groupOrBlock})`;
