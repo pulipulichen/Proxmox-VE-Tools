@@ -1,38 +1,25 @@
 #!/usr/bin/env bash
-# Burn-in test script for Ubuntu 24.04 (Merged Version)
-# Combines CPU, Memory, and Disk stress into a single stress-ng process
-# Generates a timestamped report upon completion.
+
+# Ubuntu 24.04 Hardware Burn-in Test Script (Auto-detect Raw Disks)
+# Combines CPU, Memory, and Auto-detected Physical Disk (Raw Device) stress testing.
 
 set -euo pipefail
 
 # -------- Configuration --------
 
-# Default duration in hours if not provided
+# Default duration in hours if not provided via argument
 DURATION_HOURS="${1:-72}"
-
-# Calculate duration in seconds
 DURATION_SEC=$((DURATION_HOURS * 3600))
 
-# For test
-# DURATION_SEC=30
+# Memory limit: Virtual memory to use for stress testing
+MEMORY_LIMIT="20G"
 
-# Memory limit: Set the amount of virtual memory to use for stress testing.
-# MEMORY_LIMIT="20G"
-MEMORY_LIMIT="80%"
+# Timezone Configuration for logs and reports
+TIMEZONE="Asia/Taipei"
 
-# Timezone Configuration
-TIMEZONE="Asia/Taipei" # Default timezone for reports and timestamps
-
-# -------- Internal Configuration --------- 
-
-# Directory for disk stress temporary files
-WORK_DIR="/tmp/burnin_workspace"
-
-# Log directory
+# Log Configuration
 LOG_DIR="."
 mkdir -p "${LOG_DIR}"
-
-# Raw log from stress-ng (temporary)
 RAW_LOG="${LOG_DIR}/stress_ng_raw.log"
 
 # -------- Helper Functions --------
@@ -49,9 +36,41 @@ require_stress_ng() {
     apt-get update -y && apt-get install -y stress-ng
 }
 
-cleanup() {
-    log "Cleaning up temporary files..."
-    rm -rf "${WORK_DIR}"
+# Auto-detect raw disks available for testing (excludes system disk and mounted drives)
+detect_raw_disks() {
+    log "Detecting available disks..."
+    
+    # 1. Identify the disk containing the root (/) partition (e.g., sda or nvme0n1)
+    local sys_disk_path
+    sys_disk_path=$(lsblk -no PKNAME "$(findmnt -nvo SOURCE /)" | head -n1 || true)
+    
+    # 2. Get all block devices of type 'disk'
+    local all_disks
+    all_disks=$(lsblk -dpno NAME,TYPE | grep "disk" | awk '{print $1}')
+    
+    local target_disks=""
+    local found_count=0
+
+    for disk in $all_disks; do
+        # Skip the system disk to prevent OS destruction
+        if [[ -n "$sys_disk_path" && "$disk" == *"$sys_disk_path"* ]]; then
+            log "Excluding system disk: $disk"
+            continue
+        fi
+
+        # Skip disks that have active mount points on the disk itself or its partitions
+        if lsblk -no MOUNTPOINT "$disk" | grep -q "/"; then
+            log "Excluding disk currently in use or mounted: $disk"
+            continue
+        fi
+
+        # Add to target list
+        target_disks+="${disk},"
+        ((found_count++))
+    done
+
+    # Remove trailing comma and output
+    echo "${target_disks%,}"
 }
 
 generate_final_report() {
@@ -70,7 +89,7 @@ generate_final_report() {
         echo "              BURN-IN TEST REPORT                      "
         echo "======================================================="
         echo "System Hostname : $(hostname)"
-        echo "Operating System: $(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"')"
+        echo "Operating System: $(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"' || echo "Unknown")"
         echo "Kernel Version  : $(uname -r)"
         echo "-------------------------------------------------------"
         echo "Start Time      : ${START_TIME_ISO}"
@@ -79,15 +98,14 @@ generate_final_report() {
         echo "-------------------------------------------------------"
         echo "Stress Configuration:"
         echo "  - CPU Workers : All Cores"
-        echo "  - VM Workers  : 2 (utilizing ~80% RAM total)"
-        echo "  - HDD Workers : 1 (Read/Write/Verify/Delete)"
-        echo "  - Work Dir    : ${WORK_DIR}"
+        echo "  - VM Workers  : 2 (Limit: ${MEMORY_LIMIT})"
+        echo "  - Raw Disks   : ${TARGET_DISKS:-None}"
         echo "-------------------------------------------------------"
         echo "Test Result Status:"
         if [ "$exit_code" -eq 0 ]; then
-            echo "  [ SUCCESS ] Completed full duration without stress-ng error."
+            echo "  [ SUCCESS ] Completed full duration without errors."
         else
-            echo "  [ WARNING ] Process exited with code ${exit_code} (Interrupted or Failed)."
+            echo "  [ WARNING ] Process interrupted or failed (Exit Code: ${exit_code})."
         fi
         echo "-------------------------------------------------------"
         echo "stress-ng Output / Metrics:"
@@ -101,53 +119,53 @@ generate_final_report() {
         echo "======================================================="
     } > "${report_file}"
 
-    log "Report generated successfully."
-    echo "Report saved to: ${report_file}"
+    log "Report generated successfully: ${report_file}"
 }
 
 # -------- Main Execution --------
 
+# Check for root privileges
 if [[ "$(id -u)" -ne 0 ]]; then
-    echo "Error: This script must be run as root."
+    echo "Error: This script must be run as root (sudo)."
     exit 1
 fi
 
 require_stress_ng
 
-# Create workspace for disk test
-mkdir -p "${WORK_DIR}"
+# Detect target disks
+TARGET_DISKS=$(detect_raw_disks)
+
+if [[ -z "$TARGET_DISKS" ]]; then
+    log "Error: No available raw disks found (must be unmounted and non-system)."
+    exit 1
+fi
 
 START_TIME_ISO=$(env TZ="${TIMEZONE}" date '+%Y-%m-%d %H:%M:%S')
 
-log "Starting Burn-in Test (Merged Mode)"
+log "Starting Burn-in Test (Auto-detect Mode)"
+log "Target Disks detected: $TARGET_DISKS"
 log "Duration: ${DURATION_HOURS} hours (${DURATION_SEC} seconds)"
-log "Logs will be stored in: ${LOG_DIR}"
 
-# Trap signals to ensure report is generated even if user cancels (Ctrl+C)
-trap 'log "Test interrupted by user!"; generate_final_report 130; cleanup; exit 1' INT TERM
+# Trap termination signals to ensure a report is generated
+trap 'log "Test interrupted by user!"; generate_final_report 130; exit 1' INT TERM
 
 # ----------------------------------------------------------------
-# THE MERGED STRESS-NG COMMAND
+# EXECUTE STRESS-NG
 # ----------------------------------------------------------------
-# Explanation of flags:
-# --cpu 0           : Use all available CPU cores.
-# --vm 2            : Start 2 memory stressors.
-# --vm-bytes 20G    : Limit VM memory usage.
-# --hdd 1           : Start 1 disk stressor.
-# --verify          : Enable data verification (replaces old wr-check opts).
-# --temp-path       : Where to write the disk stress files.
-# --timeout         : Stop after X seconds.
-# --metrics-brief   : Output summary metrics at the end.
-# --log-file        : Save output to file.
+# --cpu 0          : Use all available CPU cores.
+# --vm 2           : Start 2 memory stress workers.
+# --rawdev 0       : Auto-assign workers for each raw device provided.
+# --rawdev-file    : Path(s) to the raw block devices (comma separated).
+# --rawdev-method  : Use 'all' to cycle through various I/O stress methods.
 # ----------------------------------------------------------------
 
 stress-ng \
     --cpu 0 \
     --vm 2 \
     --vm-bytes "${MEMORY_LIMIT}" \
-    --hdd 1 \
-    --verify \
-    --temp-path "${WORK_DIR}" \
+    --rawdev 0 \
+    --rawdev-file "${TARGET_DISKS}" \
+    --rawdev-method all \
     --timeout "${DURATION_SEC}s" \
     --metrics-brief \
     --log-file "${RAW_LOG}" \
@@ -158,11 +176,10 @@ EXIT_CODE=$?
 # -------- Post-Processing --------
 
 generate_final_report "$EXIT_CODE"
-cleanup
 
 if [ "$EXIT_CODE" -eq 0 ]; then
     log "Burn-in test finished successfully."
 else
-    log "Burn-in test finished with errors (Code: $EXIT_CODE)."
+    log "Burn-in test finished with errors/interruption (Code: $EXIT_CODE)."
     exit "$EXIT_CODE"
 fi
