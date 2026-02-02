@@ -17,8 +17,8 @@ DURATION_SEC=$((DURATION_HOURS * 3600))
 # DURATION_SEC=30
 
 # Memory limit: Set the amount of virtual memory to use for stress testing.
-MEMORY_LIMIT="20G"
-# MEMORY_LIMIT="80%"
+# MEMORY_LIMIT="20G"
+MEMORY_LIMIT="80%"
 
 # Timezone Configuration
 TIMEZONE="Asia/Taipei" # Default timezone for reports and timestamps
