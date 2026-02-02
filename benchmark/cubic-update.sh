@@ -5,6 +5,7 @@
 # Description: Downloads Proxmox VE benchmark tools to specific paths.
 # Target OS: Ubuntu 24.04
 # Author: Bash Master
+# sudo curl -L https://github.com/pulipulichen/Proxmox-VE-Tools/raw/refs/heads/main/benchmark/cubic-update.sh -o /root/cubic-update.sh && sudo chmod +x /root/cubic-update.sh
 # =================================================================
 
 # Ensure the script is running with root privileges
